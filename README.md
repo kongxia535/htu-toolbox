@@ -21,7 +21,7 @@
 3. 第一次运行时输入上网账号、密码、运营商和校园门户地址。
 4. 安装完成后会自动打开本地控制台：`http://127.0.0.1:8765/`。
 
-密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 和发布压缩包都会排除账号、密码、日志及本机门户参数。
+密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 
 
 ## 指令行版本
 
