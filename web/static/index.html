@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htu-token" content="{{HTU_TOKEN}}">
+  <title>校园网自动登录控制台</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">H</div>
+      <div>
+        <h1>校园网自动登录</h1>
+        <p id="lastUpdate">等待状态数据</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="connectionPill" class="status-pill neutral">
+        <span class="status-dot"></span>
+        <span id="connectionText">连接中</span>
+      </span>
+      <button id="refreshButton" class="button button-quiet" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+        刷新
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="metric-grid" aria-label="运行概览">
+      <article class="metric">
+        <div class="metric-icon task-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </div>
+        <div>
+          <span class="metric-label">任务状态</span>
+          <strong id="taskState">--</strong>
+          <small id="taskHint">等待读取</small>
+        </div>
+      </article>
+      <article class="metric">
+        <div class="metric-icon network-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 20h.01M2 9a15 15 0 0 1 20 0"/></svg>
+        </div>
+        <div>
+          <span class="metric-label">网络状态</span>
+          <strong id="networkState">--</strong>
+          <small id="networkHint">等待探针</small>
+        </div>
+      </article>
+      <article class="metric">
+        <div class="metric-icon process-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>
+        </div>
+        <div>
+          <span class="metric-label">常驻进程</span>
+          <strong id="processState">--</strong>
+          <small id="processHint">等待读取</small>
+        </div>
+      </article>
+      <article class="metric">
+        <div class="metric-icon clock-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+        <div>
+          <span class="metric-label">下次看门狗</span>
+          <strong id="nextRun">--</strong>
+          <small id="lastRun">上次运行 --</small>
+        </div>
+      </article>
+    </section>
+
+    <section class="dashboard-grid">
+      <section class="panel controls-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>运行控制</h2>
+            <p>任务操作会立即作用于后台进程</p>
+          </div>
+        </div>
+        <div class="action-grid">
+          <button class="action-button primary" data-action="restart" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+            <span>重启任务</span>
+          </button>
+          <button class="action-button" data-action="check" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.3-5.7M20 4v6h-6"/></svg>
+            <span>立即检测</span>
+          </button>
+          <button class="action-button" data-action="force-login" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+            <span>强制登录</span>
+          </button>
+          <button class="action-button" data-action="start" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>
+            <span>启动任务</span>
+          </button>
+          <button class="action-button" data-action="stop" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+            <span>停止任务</span>
+          </button>
+          <button id="downloadLogButton" class="action-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+            <span>下载日志</span>
+          </button>
+        </div>
+        <div class="task-detail">
+          <div><span>PID</span><strong id="processIds">--</strong></div>
+          <div><span>自动重启</span><strong id="restartPolicy">--</strong></div>
+          <div><span>看门狗间隔</span><strong id="watchdogInterval">--</strong></div>
+        </div>
+      </section>
+
+      <section class="panel config-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>账号配置</h2>
+            <p>密码留空时保留当前密文</p>
+          </div>
+        </div>
+        <form id="configForm">
+          <div class="form-row two-columns">
+            <label>
+              <span>上网账号</span>
+              <input id="accountInput" name="account" autocomplete="username" required>
+            </label>
+            <label>
+              <span>运营商</span>
+              <select id="operatorSelect" name="operator">
+                <option value="lt">中国联通</option>
+                <option value="yd">中国移动</option>
+                <option value="dx">中国电信</option>
+                <option value="hsd">校园本地账号</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>上网密码</span>
+            <input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="留空则不修改">
+          </label>
+          <label>
+            <span>校园门户地址</span>
+            <textarea id="portalInput" name="portalUrl" rows="3" required></textarea>
+          </label>
+          <div class="form-row interval-row">
+            <label>
+              <span>轮询间隔</span>
+              <div class="number-control">
+                <button type="button" id="intervalDown" aria-label="减少间隔">−</button>
+                <input id="intervalInput" name="intervalSeconds" type="number" min="5" max="3600" step="5" required>
+                <span>秒</span>
+                <button type="button" id="intervalUp" aria-label="增加间隔">+</button>
+              </div>
+            </label>
+            <div class="password-state">
+              <span class="password-indicator"></span>
+              <span id="passwordConfigured">密码状态未知</span>
+            </div>
+          </div>
+          <button class="save-button" type="submit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM7 3v6h9V3M7 21v-8h10v8"/></svg>
+            保存并应用
+          </button>
+        </form>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-heading log-heading">
+          <div>
+            <h2>运行日志</h2>
+            <p id="logMeta">读取中</p>
+          </div>
+          <div class="log-tools">
+            <label class="auto-refresh">
+              <input id="autoRefresh" type="checkbox" checked>
+              <span>自动刷新</span>
+            </label>
+            <select id="logTail" aria-label="日志行数">
+              <option value="100">100 行</option>
+              <option value="250" selected>250 行</option>
+              <option value="500">500 行</option>
+              <option value="1000">1000 行</option>
+            </select>
+          </div>
+        </div>
+        <pre id="logOutput" class="log-output" aria-live="polite"></pre>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
