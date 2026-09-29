@@ -12,6 +12,17 @@
 
 -   [x] 校园网登录
 
+## 一键安装（Windows）
+
+环境要求：Windows 10/11、Windows PowerShell 5.1、Python 3。
+
+1. 下载并完整解压项目。
+2. 双击根目录的 `Setup.cmd`，会直接打开本地控制台：`http://127.0.0.1:8765/`。
+3. 首次在网页中填写上网账号、密码和运营商；页面会尝试自动获取校园门户地址，未检测到时可手动粘贴。
+4. 点击“保存并应用”后才会安装并启动后台自动登录任务。再次运行 `Setup.cmd` 不会重置已有账号配置。
+
+密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 已被 Git 忽略，不会随代码上传。
+
 ## 指令行版本
 
 ### 安装
@@ -45,3 +56,63 @@ htu-toolbox-cli
 2. 登录校园网
 
 启动程序，自动登录(启动程序默认行为是登录校园网)
+
+## Windows 断网自动登录
+
+`scripts/CampusNetAutoLogin.ps1` 是不依赖 Rust 工具链的常驻探针，默认每 10 秒检测一次网络。探针直接请求公网 IP，并显式禁用系统代理和普通 DNS 解析；检测到断网或被校园门户拦截后，直接向校园门户 IP 提交认证。
+
+安装当前用户的开机自动任务：
+
+```powershell
+$password = Read-Host -Prompt '校园网密码' -AsSecureString
+.\scripts\Install-CampusNetAutoLogin.ps1 `
+  -Account YOUR_STUDENT_ID `
+  -Password $password `
+  -Operator lt `
+  -PortalUrl '从浏览器复制的完整校园门户地址'
+```
+
+密码使用 Windows DPAPI 加密后写入 `runtime/campus-auto-login.json`，只允许当前 Windows 用户解密。运行日志位于 `runtime/campus-auto-login.log`，脚本按状态变化记录，不会每 10 秒刷屏。
+
+计划任务支持可关闭的登录自启和可配置的周期看门狗；脚本常驻进程若意外退出，任务会按设定的次数和等待时间自动重新拉起。网页控制台可修改开机自启、看门狗间隔、自动重启次数和重启等待时间。关闭开机自启后任务仍可手动运行，但不会在下次登录 Windows 时自动启动。停止任务时会同时禁用计划任务和看门狗，重新启动时会恢复启用。登录连续失败时探针不会退出，而是按 10、20、40、60 秒逐步退避后继续重试。
+
+手动做一次检测：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\CampusNetAutoLogin.ps1 -Once -ShowStatus
+```
+
+查看后台任务：
+
+```powershell
+Get-ScheduledTask -TaskName HTU-CampusNet-AutoLogin
+Get-ScheduledTaskInfo -TaskName HTU-CampusNet-AutoLogin
+```
+
+卸载任务并保留加密配置：
+
+```powershell
+.\scripts\Uninstall-CampusNetAutoLogin.ps1
+```
+
+## 本地网页控制台
+
+网页控制台只监听本机回环地址，不向局域网或公网开放：
+
+```text
+http://127.0.0.1:8765/
+```
+
+页面可以查看任务状态、网络状态、进程 PID、下次看门狗时间、运行日志，并可以启动、彻底终止、重启、立即检测、强制登录和修改账号配置。校园门户地址支持从未认证网络的 HTTP 重定向中自动获取；终止任务会禁用计划任务并结束启动器、探针及其全部子进程。
+
+网页服务安装为当前用户的计划任务，登录后自动运行，异常退出后由看门狗重新拉起。手动安装或重新应用：
+
+```powershell
+.\scripts\Install-WebDashboard.ps1 -Port 8765
+```
+
+卸载网页服务：
+
+```powershell
+.\scripts\Uninstall-WebDashboard.ps1 -Port 8765
+```
