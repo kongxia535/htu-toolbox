@@ -17,6 +17,7 @@ const ui = {
   processIds: byId("processIds"),
   restartPolicy: byId("restartPolicy"),
   watchdogInterval: byId("watchdogInterval"),
+  autoStartStatus: byId("autoStartStatus"),
   accountInput: byId("accountInput"),
   operatorSelect: byId("operatorSelect"),
   passwordInput: byId("passwordInput"),
@@ -24,6 +25,10 @@ const ui = {
   intervalInput: byId("intervalInput"),
   intervalDown: byId("intervalDown"),
   intervalUp: byId("intervalUp"),
+  watchdogIntervalInput: byId("watchdogIntervalInput"),
+  restartCountInput: byId("restartCountInput"),
+  restartIntervalInput: byId("restartIntervalInput"),
+  autoStartInput: byId("autoStartInput"),
   passwordConfigured: byId("passwordConfigured"),
   configForm: byId("configForm"),
   autoRefresh: byId("autoRefresh"),
@@ -113,9 +118,15 @@ function formatTaskResult(value) {
   return `上次结果 0x${Number(value).toString(16).toUpperCase()}`;
 }
 
-function formatInterval(value) {
+function formatDuration(value) {
   if (!value) return "--";
-  return String(value).replace("PT", "").replace("M", " 分钟");
+  const match = String(value).match(/^P(?:([0-9]+)D)?T?(?:([0-9]+)H)?(?:([0-9]+)M)?$/);
+  if (!match) return String(value);
+  const parts = [];
+  if (match[1]) parts.push(`${match[1]} 天`);
+  if (match[2]) parts.push(`${match[2]} 小时`);
+  if (match[3]) parts.push(`${match[3]} 分钟`);
+  return parts.join(" ") || "--";
 }
 
 function updateStatus(data) {
@@ -135,13 +146,20 @@ function updateStatus(data) {
 
   ui.processState.textContent = watcherRunning ? `${task.watcherCount} 个` : "未运行";
   ui.processState.style.color = watcherRunning ? "var(--success)" : "var(--danger)";
-  ui.processHint.textContent = watcherRunning ? "后台常驻正常" : "等待看门狗拉起";
+  ui.processHint.textContent = watcherRunning
+    ? "后台常驻正常"
+    : task.state === "Disabled"
+      ? "任务和看门狗已停止"
+      : "等待看门狗拉起";
 
-  ui.nextRun.textContent = formatDate(task.nextRunTime);
+  ui.nextRun.textContent = task.state === "Disabled" ? "--" : formatDate(task.nextRunTime);
   ui.lastRun.textContent = `上次运行 ${formatDate(task.lastRunTime)}`;
   ui.processIds.textContent = task.processIds?.length ? task.processIds.join(", ") : "--";
-  ui.restartPolicy.textContent = task.restartCount ? `${task.restartCount} 次 / 每分钟` : "--";
-  ui.watchdogInterval.textContent = formatInterval(task.repeatInterval);
+  ui.restartPolicy.textContent = Number(task.restartCount) > 0
+    ? `${task.restartCount} 次 / 每 ${formatDuration(task.restartInterval)}`
+    : "已关闭";
+  ui.watchdogInterval.textContent = formatDuration(task.repeatInterval);
+  ui.autoStartStatus.textContent = task.autoStart ? "已开启" : "已关闭";
   ui.lastUpdate.textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
 
   if (task.ok === false) {
@@ -157,12 +175,20 @@ function updateStatus(data) {
     ui.operatorSelect.value = config.operator || "lt";
     ui.portalInput.value = config.portalUrl || "";
     ui.intervalInput.value = config.intervalSeconds || 10;
+    ui.watchdogIntervalInput.value = config.watchdogIntervalMinutes ?? 5;
+    ui.restartCountInput.value = config.restartCount ?? 999;
+    ui.restartIntervalInput.value = config.restartIntervalMinutes ?? 1;
+    ui.autoStartInput.checked = config.autoStart !== false;
     state.configInitialized = true;
   } else if (!state.configDirty) {
     ui.accountInput.value = config.account || ui.accountInput.value;
     ui.operatorSelect.value = config.operator || ui.operatorSelect.value;
     ui.portalInput.value = config.portalUrl || ui.portalInput.value;
     ui.intervalInput.value = config.intervalSeconds || ui.intervalInput.value;
+    ui.watchdogIntervalInput.value = config.watchdogIntervalMinutes ?? ui.watchdogIntervalInput.value;
+    ui.restartCountInput.value = config.restartCount ?? ui.restartCountInput.value;
+    ui.restartIntervalInput.value = config.restartIntervalMinutes ?? ui.restartIntervalInput.value;
+    ui.autoStartInput.checked = config.autoStart !== false;
   }
 
   const passwordSet = Boolean(config.passwordConfigured);
@@ -252,6 +278,10 @@ async function saveConfig(event) {
       password: ui.passwordInput.value,
       portalUrl: ui.portalInput.value.trim(),
       intervalSeconds: Number(ui.intervalInput.value),
+      watchdogIntervalMinutes: Number(ui.watchdogIntervalInput.value),
+      restartCount: Number(ui.restartCountInput.value),
+      restartIntervalMinutes: Number(ui.restartIntervalInput.value),
+      autoStart: ui.autoStartInput.checked,
     };
     const result = await api("/api/config", {
       method: "POST",

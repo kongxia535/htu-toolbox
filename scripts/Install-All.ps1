@@ -122,16 +122,31 @@ if ($needsConfiguration) {
         -Password $password `
         -Operator $operator `
         -PortalUrl $portalUrl `
-        -IntervalSeconds 10
+        -IntervalSeconds 10 `
+        -WatchdogIntervalMinutes 5 `
+        -RestartCount 999 `
+        -RestartIntervalMinutes 1
 }
 else {
     Write-Host '已检测到现有配置，正在保留加密密码并重新应用任务。'
-    & $installAutoLogin `
-        -Account ([string]$existing.account) `
-        -Operator ([string]$existing.operator) `
-        -PortalUrl ([string]$existing.portalUrl) `
-        -IntervalSeconds ([int]$existing.intervalSeconds) `
-        -PreservePassword
+    $watchdogIntervalMinutes = if ($existing.PSObject.Properties['watchdogIntervalMinutes']) { [int]$existing.watchdogIntervalMinutes } else { 5 }
+    $restartCount = if ($existing.PSObject.Properties['restartCount']) { [int]$existing.restartCount } else { 999 }
+    $restartIntervalMinutes = if ($existing.PSObject.Properties['restartIntervalMinutes']) { [int]$existing.restartIntervalMinutes } else { 1 }
+    $autoStart = if ($existing.PSObject.Properties['autoStart']) { [bool]$existing.autoStart } else { $true }
+    $installArguments = @{
+        Account = [string]$existing.account
+        Operator = [string]$existing.operator
+        PortalUrl = [string]$existing.portalUrl
+        IntervalSeconds = [int]$existing.intervalSeconds
+        WatchdogIntervalMinutes = $watchdogIntervalMinutes
+        RestartCount = $restartCount
+        RestartIntervalMinutes = $restartIntervalMinutes
+        PreservePassword = $true
+    }
+    if (-not $autoStart) {
+        $installArguments.DisableAutoStart = $true
+    }
+    & $installAutoLogin @installArguments
 }
 
 & $installDashboard -Port $Port

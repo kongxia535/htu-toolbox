@@ -15,6 +15,17 @@ param(
     [ValidateRange(5, 3600)]
     [int]$IntervalSeconds = 10,
 
+    [ValidateRange(1, 1440)]
+    [int]$WatchdogIntervalMinutes = 5,
+
+    [ValidateRange(0, 999)]
+    [int]$RestartCount = 999,
+
+    [ValidateRange(1, 1440)]
+    [int]$RestartIntervalMinutes = 1,
+
+    [switch]$DisableAutoStart,
+
     [string]$TaskName = 'HTU-CampusNet-AutoLogin',
     [string]$ConfigPath,
     [string]$LogPath
@@ -112,6 +123,10 @@ $config = [ordered]@{
     operator        = $Operator
     portalUrl       = $PortalUrl
     intervalSeconds = $IntervalSeconds
+    watchdogIntervalMinutes = $WatchdogIntervalMinutes
+    restartCount = $RestartCount
+    restartIntervalMinutes = $RestartIntervalMinutes
+    autoStart = -not $DisableAutoStart.IsPresent
 }
 
 $config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
@@ -155,28 +170,37 @@ if ($null -ne $existingTask) {
 
 $userId = '{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME
 $action = New-ScheduledTaskAction -Execute $pythonwExe -Argument $actionArguments -WorkingDirectory $repositoryRoot
-$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
-$logonTrigger.Delay = 'PT15S'
-$watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
-$triggers = @($logonTrigger, $watchdogTrigger)
+$triggers = @()
+if (-not $DisableAutoStart) {
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userId
+    $logonTrigger.Delay = 'PT15S'
+    $watchdogTrigger = New-ScheduledTaskTrigger `
+        -Once `
+        -At (Get-Date).AddMinutes(1) `
+        -RepetitionInterval (New-TimeSpan -Minutes $WatchdogIntervalMinutes)
+    $triggers = @($logonTrigger, $watchdogTrigger)
+}
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew
 $settings.ExecutionTimeLimit = 'PT0S'
-$settings.RestartCount = 999
-$settings.RestartInterval = 'PT1M'
+$settings.RestartCount = $RestartCount
+$settings.RestartInterval = [System.Xml.XmlConvert]::ToString((New-TimeSpan -Minutes $RestartIntervalMinutes))
 $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
-
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Description 'HTU campus network watcher; checks every 10 seconds and logs in automatically when offline.' `
-    -Action $action `
-    -Trigger $triggers `
-    -Settings $settings `
-    -Principal $principal `
-    -Force | Out-Null
+$registration = @{
+    TaskName = $TaskName
+    Description = "HTU campus network watcher; checks every $IntervalSeconds seconds and logs in automatically when offline."
+    Action = $action
+    Settings = $settings
+    Principal = $principal
+    Force = $true
+}
+if ($triggers.Count -gt 0) {
+    $registration.Trigger = $triggers
+}
+Register-ScheduledTask @registration | Out-Null
 
 Start-ScheduledTask -TaskName $TaskName
 
@@ -186,3 +210,6 @@ Write-Host "Config: $ConfigPath"
 Write-Host "Log:    $LogPath"
 Write-Host "Account: $Account@$Operator"
 Write-Host "Interval: ${IntervalSeconds}s"
+Write-Host "Watchdog: ${WatchdogIntervalMinutes}m"
+Write-Host "Restart policy: $RestartCount attempts, every ${RestartIntervalMinutes}m"
+Write-Host "Start at logon: $(-not $DisableAutoStart.IsPresent)"

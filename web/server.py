@@ -156,6 +156,12 @@ $ErrorActionPreference = 'Stop'
 try {{
     $task = Get-ScheduledTask -TaskName '{TASK_NAME}'
     $info = Get-ScheduledTaskInfo -TaskName '{TASK_NAME}'
+    $repeatTriggers = @($task.Triggers | Where-Object {{
+        -not [string]::IsNullOrWhiteSpace([string]$_.Repetition.Interval)
+    }})
+    $logonTriggers = @($task.Triggers | Where-Object {{
+        $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger'
+    }})
     $processes = @(Get-CimInstance Win32_Process | Where-Object {{
         $_.ProcessId -ne $PID -and $_.Name -eq 'powershell.exe' -and $_.CommandLine -like '*CampusNetAutoLogin.ps1*'
     }})
@@ -169,7 +175,8 @@ try {{
         processIds = @($processes | ForEach-Object {{ [int]$_.ProcessId }})
         restartCount = [int]$task.Settings.RestartCount
         restartInterval = [string]$task.Settings.RestartInterval
-        repeatInterval = if ($task.Triggers.Count -gt 1) {{ [string]$task.Triggers[1].Repetition.Interval }} else {{ '' }}
+        repeatInterval = if ($repeatTriggers.Count -gt 0) {{ [string]$repeatTriggers[0].Repetition.Interval }} else {{ '' }}
+        autoStart = $logonTriggers.Count -gt 0
         multipleInstances = [string]$task.Settings.MultipleInstances
     }} | ConvertTo-Json -Compress
 }}
@@ -267,6 +274,10 @@ def get_status() -> dict[str, Any]:
         "account": config.get("account", ""),
         "operator": config.get("operator", ""),
         "intervalSeconds": config.get("intervalSeconds", 10),
+        "watchdogIntervalMinutes": config.get("watchdogIntervalMinutes", 5),
+        "restartCount": config.get("restartCount", 999),
+        "restartIntervalMinutes": config.get("restartIntervalMinutes", 1),
+        "autoStart": config.get("autoStart", True),
         "portalUrl": config.get("portalUrl", ""),
         "passwordConfigured": bool(config.get("password")),
     }
@@ -288,6 +299,14 @@ def validate_config_update(payload: dict[str, Any]) -> dict[str, Any]:
     portal_url = str(payload.get("portalUrl", existing.get("portalUrl", ""))).strip()
     password = str(payload.get("password", ""))
     interval_raw = payload.get("intervalSeconds", existing.get("intervalSeconds", 10))
+    watchdog_interval_raw = payload.get(
+        "watchdogIntervalMinutes", existing.get("watchdogIntervalMinutes", 5)
+    )
+    restart_count_raw = payload.get("restartCount", existing.get("restartCount", 999))
+    restart_interval_raw = payload.get(
+        "restartIntervalMinutes", existing.get("restartIntervalMinutes", 1)
+    )
+    auto_start_raw = payload.get("autoStart", existing.get("autoStart", True))
 
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", account):
         raise DashboardError("账号只能包含字母、数字、点、下划线或连字符。")
@@ -311,6 +330,20 @@ def validate_config_update(payload: dict[str, Any]) -> dict[str, Any]:
         raise DashboardError("轮询间隔必须是整数。") from error
     if not 5 <= interval <= 3600:
         raise DashboardError("轮询间隔必须在 5 到 3600 秒之间。")
+    try:
+        watchdog_interval = int(watchdog_interval_raw)
+        restart_count = int(restart_count_raw)
+        restart_interval = int(restart_interval_raw)
+    except (TypeError, ValueError) as error:
+        raise DashboardError("看门狗和自动重启参数必须是整数。") from error
+    if not 1 <= watchdog_interval <= 1440:
+        raise DashboardError("看门狗间隔必须在 1 到 1440 分钟之间。")
+    if not 0 <= restart_count <= 999:
+        raise DashboardError("自动重启次数必须在 0 到 999 次之间。")
+    if not 1 <= restart_interval <= 1440:
+        raise DashboardError("自动重启间隔必须在 1 到 1440 分钟之间。")
+    if not isinstance(auto_start_raw, bool):
+        raise DashboardError("开机自启设置必须是布尔值。")
     if password and len(password) > 128:
         raise DashboardError("密码长度不能超过 128 个字符。")
 
@@ -319,6 +352,10 @@ def validate_config_update(payload: dict[str, Any]) -> dict[str, Any]:
         "operator": operator,
         "portalUrl": portal_url,
         "intervalSeconds": interval,
+        "watchdogIntervalMinutes": watchdog_interval,
+        "restartCount": restart_count,
+        "restartIntervalMinutes": restart_interval,
+        "autoStart": auto_start_raw,
         "password": password,
     }
 
@@ -334,24 +371,41 @@ def update_config(payload: dict[str, Any]) -> str:
         config["portalUrl"],
         "-IntervalSeconds",
         str(config["intervalSeconds"]),
+        "-WatchdogIntervalMinutes",
+        str(config["watchdogIntervalMinutes"]),
+        "-RestartCount",
+        str(config["restartCount"]),
+        "-RestartIntervalMinutes",
+        str(config["restartIntervalMinutes"]),
     ]
     env = os.environ.copy()
     if config["password"]:
         env["HTU_AUTO_LOGIN_PASSWORD"] = config["password"]
     else:
         arguments.append("-PreservePassword")
+    if not config["autoStart"]:
+        arguments.append("-DisableAutoStart")
 
     return run_powershell_script(INSTALL_SCRIPT, arguments, timeout=60, env=env)
 
 
 def perform_action(action: str) -> str:
     if action == "start":
-        return run_powershell(f"Start-ScheduledTask -TaskName '{TASK_NAME}'", timeout=20)
+        run_powershell(
+            f"Enable-ScheduledTask -TaskName '{TASK_NAME}' | Out-Null; "
+            f"Start-ScheduledTask -TaskName '{TASK_NAME}'",
+            timeout=20,
+        )
+        return "Campus auto-login task and watchdog started."
     if action == "stop":
         return run_powershell_script(STOP_SCRIPT, ["-TaskName", TASK_NAME], timeout=30)
     if action == "restart":
         run_powershell_script(STOP_SCRIPT, ["-TaskName", TASK_NAME], timeout=30)
-        run_powershell(f"Start-ScheduledTask -TaskName '{TASK_NAME}'", timeout=20)
+        run_powershell(
+            f"Enable-ScheduledTask -TaskName '{TASK_NAME}' | Out-Null; "
+            f"Start-ScheduledTask -TaskName '{TASK_NAME}'",
+            timeout=20,
+        )
         return "Campus auto-login task restarted."
     if action == "check":
         return run_powershell_script(

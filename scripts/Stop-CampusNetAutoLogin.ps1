@@ -14,6 +14,7 @@ $childPidPath = Join-Path $runtimeDirectory 'campus-auto-login-child.pid'
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($null -ne $task) {
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 }
 
@@ -45,4 +46,4 @@ if ($remaining) {
     throw "Unable to stop all campus watcher processes: $($remaining.ProcessId -join ', ')"
 }
 
-Write-Host "Campus auto-login task stopped: $TaskName"
+Write-Host "Campus auto-login task and watchdog stopped: $TaskName"
