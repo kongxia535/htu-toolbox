@@ -1,118 +1,55 @@
 # htu-toolbox
 
-河师大工具箱
+河师大校园网登录工具。本 fork 在上游 Rust 命令行工具的基础上，增加了 Windows 断网自动登录、后台计划任务和本地网页控制台。
 
-## :construction: WIP :construction:
+## Windows 自动登录
 
-本项目还在测试中，如有bug请及时提交issue。
+适用环境：Windows 10/11、Windows PowerShell 5.1、Python 3（安装时需加入 PATH）。网页自动登录功能不需要 Rust。
 
-欢迎提交PR来完善本项目。
+1. 从[本仓库 Releases](https://github.com/kongxia535/htu-toolbox/releases)下载 `htu-toolbox-community.zip` 并完整解压，或下载本仓库源码。
+2. 双击根目录的 `Setup.cmd`。它会安装并启动本地网页控制台，在浏览器打开 `http://127.0.0.1:8765/`。
+3. 首次使用时，在网页填写上网账号、密码、运营商及校园门户地址。可点击“自动获取”；若当前网络已认证或没有返回门户重定向，请手动粘贴完整的门户地址。
+4. 点击“保存并应用”安装并启动自动登录任务。以后再次运行 `Setup.cmd` 只会重新安装/打开控制台，不会重置已有账号配置。
 
-## 功能
+控制台仅监听本机回环地址。页面可查看网络与计划任务状态、常驻进程、看门狗时间及运行日志，也可启动、终止、重启任务，立即检测或强制登录。账号配置里可以调整轮询间隔（默认 10 秒）、开机自启、看门狗间隔、自动重启次数和重启等待时间。停止任务会禁用其计划任务与看门狗，并结束对应的常驻进程；再次启动会恢复任务。
 
--   [x] 校园网登录
+探针以直接请求公网 IP 的方式检测连通性，不依赖普通 DNS 解析或系统代理；网络不可用或被校园门户拦截时尝试登录。登录失败会退避重试。门户地址自动获取仅识别项目支持的校园门户，不能保证在已认证或未连接校园网时成功。
 
-## 一键安装（Windows）
+密码由当前 Windows 用户的 DPAPI 加密后写入 `runtime/campus-auto-login.json`；日志位于 `runtime/campus-auto-login.log`。`runtime/` 已被 Git 忽略，不应手动上传或分享。换电脑或换 Windows 用户时需重新配置密码。
 
-环境要求：Windows 10/11、Windows PowerShell 5.1、Python 3。
+### 任务维护
 
-1. 下载并完整解压项目。
-2. 双击根目录的 `Setup.cmd`，会直接打开本地控制台：`http://127.0.0.1:8765/`。
-3. 首次在网页中填写上网账号、密码和运营商；页面会尝试自动获取校园门户地址，未检测到时可手动粘贴。
-4. 点击“保存并应用”后才会安装并启动后台自动登录任务。再次运行 `Setup.cmd` 不会重置已有账号配置。
-
-密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 
-
-## 指令行版本
-
-### 安装
-
--   从release下载
-
-在[release页](https://github.com/arkuna23/htu-toolbox/releases)根据你的操作系统下载可用的可执行文件
-
--   或是使用`cargo install`
-
-需要确保你安装了rust工具链。
-
-```bash
-cargo install htu-toolbox-cli --git https://github.com/arkuna23/htu-toolbox
-```
-
-### 快速开始
-
-#### 校园网登录
-
-1. 首先需要设定你的校园网账号
-
-```bash
-htu-toolbox-cli
-```
-
-或 双击下载的可执行文件启动(Windows)
-
-第一次启动会有校园网账号设置向导，按照向导输入信息，回车确认，上下键选择
-
-2. 登录校园网
-
-启动程序，自动登录(启动程序默认行为是登录校园网)
-
-## Windows 断网自动登录
-
-`scripts/CampusNetAutoLogin.ps1` 是不依赖 Rust 工具链的常驻探针，默认每 10 秒检测一次网络。探针直接请求公网 IP，并显式禁用系统代理和普通 DNS 解析；检测到断网或被校园门户拦截后，直接向校园门户 IP 提交认证。
-
-安装当前用户的开机自动任务：
-
-```powershell
-$password = Read-Host -Prompt '校园网密码' -AsSecureString
-.\scripts\Install-CampusNetAutoLogin.ps1 `
-  -Account YOUR_STUDENT_ID `
-  -Password $password `
-  -Operator lt `
-  -PortalUrl '从浏览器复制的完整校园门户地址'
-```
-
-密码使用 Windows DPAPI 加密后写入 `runtime/campus-auto-login.json`，只允许当前 Windows 用户解密。运行日志位于 `runtime/campus-auto-login.log`，脚本按状态变化记录，不会每 10 秒刷屏。
-
-计划任务支持可关闭的登录自启和可配置的周期看门狗；脚本常驻进程若意外退出，任务会按设定的次数和等待时间自动重新拉起。网页控制台可修改开机自启、看门狗间隔、自动重启次数和重启等待时间。关闭开机自启后任务仍可手动运行，但不会在下次登录 Windows 时自动启动。停止任务时会同时禁用计划任务和看门狗，重新启动时会恢复启用。登录连续失败时探针不会退出，而是按 10、20、40、60 秒逐步退避后继续重试。
-
-手动做一次检测：
+在项目根目录打开 PowerShell，可手动执行一次检测：
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\CampusNetAutoLogin.ps1 -Once -ShowStatus
 ```
 
-查看后台任务：
+查看计划任务：
 
 ```powershell
 Get-ScheduledTask -TaskName HTU-CampusNet-AutoLogin
 Get-ScheduledTaskInfo -TaskName HTU-CampusNet-AutoLogin
+Get-ScheduledTask -TaskName HTU-CampusNet-Dashboard
 ```
 
-卸载任务并保留加密配置：
+卸载两个后台任务并保留加密配置及日志：
 
 ```powershell
 .\scripts\Uninstall-CampusNetAutoLogin.ps1
+.\scripts\Uninstall-WebDashboard.ps1
 ```
 
-## 本地网页控制台
+如需同时删除自动登录配置和日志，可给第一条卸载命令加上 `-RemoveData`。仅重新安装网页控制台可运行 `.\scripts\Install-WebDashboard.ps1 -Port 8765`。网页控制台和自动登录探针是两个独立的计划任务。
 
-网页控制台只监听本机回环地址，不向局域网或公网开放：
+## Rust 命令行工具
 
-```text
-http://127.0.0.1:8765/
+仓库保留上游的 Rust CLI，可单次登录/登出校园网；它与 Windows 网页自动登录任务互不依赖。已安装 Rust 工具链时，可从源码安装：
+
+```bash
+cargo install htu-toolbox-cli --git https://github.com/kongxia535/htu-toolbox
 ```
 
-页面可以查看任务状态、网络状态、进程 PID、下次看门狗时间、运行日志，并可以启动、彻底终止、重启、立即检测、强制登录和修改账号配置。校园门户地址支持从未认证网络的 HTTP 重定向中自动获取；终止任务会禁用计划任务并结束启动器、探针及其全部子进程。
+运行 `htu-toolbox-cli`；首次启动会提示配置账号，之后启动时默认尝试登录。命令行工具的配置与 Windows 网页控制台的 `runtime/` 配置不是同一份。
 
-网页服务安装为当前用户的计划任务，登录后自动运行，异常退出后由看门狗重新拉起。手动安装或重新应用：
-
-```powershell
-.\scripts\Install-WebDashboard.ps1 -Port 8765
-```
-
-卸载网页服务：
-
-```powershell
-.\scripts\Uninstall-WebDashboard.ps1 -Port 8765
-```
+欢迎通过 Issue 反馈问题或提交 PR。
