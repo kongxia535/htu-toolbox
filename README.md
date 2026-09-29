@@ -116,13 +116,3 @@ http://127.0.0.1:8765/
 ```powershell
 .\scripts\Uninstall-WebDashboard.ps1 -Port 8765
 ```
-
-## 发布打包
-
-生成不包含 `runtime/`、日志、缓存和本机配置的社区发布包：
-
-```powershell
-.\scripts\Package-Release.ps1
-```
-
-脚本会在 `dist/` 下生成 ZIP 和 SHA256 文件，并在压缩前检查账号、密码、MAC、内网 IP 和本机用户名等敏感信息。
