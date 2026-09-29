@@ -21,7 +21,7 @@
 3. 首次在网页中填写上网账号、密码和运营商；页面会尝试自动获取校园门户地址，未检测到时可手动粘贴。
 4. 点击“保存并应用”后才会安装并启动后台自动登录任务。再次运行 `Setup.cmd` 不会重置已有账号配置。
 
-密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 已被 Git 忽略，不会随代码上传。
+密码使用当前 Windows 用户的 DPAPI 加密保存在 `runtime/campus-auto-login.json`。`runtime/` 
 
 ## 指令行版本
 
