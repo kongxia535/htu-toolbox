@@ -22,6 +22,7 @@ const ui = {
   operatorSelect: byId("operatorSelect"),
   passwordInput: byId("passwordInput"),
   portalInput: byId("portalInput"),
+  detectPortalButton: byId("detectPortalButton"),
   intervalInput: byId("intervalInput"),
   intervalDown: byId("intervalDown"),
   intervalUp: byId("intervalUp"),
@@ -43,6 +44,7 @@ const state = {
   statusLoading: false,
   logsLoading: false,
   actionLoading: false,
+  taskConfigured: false,
   configInitialized: false,
   configDirty: false,
 };
@@ -107,6 +109,7 @@ function formatTaskState(task) {
     Ready: "已就绪",
     Disabled: "已禁用",
     Queued: "排队中",
+    NotInstalled: "未配置",
   };
   return labels[task.state] || task.state || "未知";
 }
@@ -135,6 +138,8 @@ function updateStatus(data) {
   const config = data.config || {};
   const taskRunning = task.state === "Running";
   const watcherRunning = Number(task.watcherCount || 0) > 0;
+  state.taskConfigured = task.state !== "NotInstalled";
+  setActionState(state.actionLoading);
 
   ui.taskState.textContent = formatTaskState(task);
   ui.taskHint.textContent = task.error || formatTaskResult(task.lastTaskResult);
@@ -150,6 +155,8 @@ function updateStatus(data) {
     ? "后台常驻正常"
     : task.state === "Disabled"
       ? "任务和看门狗已停止"
+      : task.state === "NotInstalled"
+        ? "请先保存账号配置"
       : "等待看门狗拉起";
 
   ui.nextRun.textContent = task.state === "Disabled" ? "--" : formatDate(task.nextRunTime);
@@ -164,6 +171,8 @@ function updateStatus(data) {
 
   if (task.ok === false) {
     setConnection("danger", "任务不可读");
+  } else if (task.state === "NotInstalled") {
+    setConnection("neutral", "等待配置");
   } else if (taskRunning && watcherRunning) {
     setConnection("success", "后台正常");
   } else {
@@ -194,6 +203,8 @@ function updateStatus(data) {
   const passwordSet = Boolean(config.passwordConfigured);
   ui.passwordConfigured.textContent = passwordSet ? "已保存加密密码" : "尚未保存密码";
   ui.passwordConfigured.parentElement.classList.toggle("set", passwordSet);
+  ui.passwordInput.required = !passwordSet;
+  ui.passwordInput.placeholder = passwordSet ? "留空则不修改" : "首次配置必填";
 
   if (Array.isArray(data.log?.lastLines) && state.logsLoading === false) {
     renderLogs(data.log.lastLines);
@@ -238,7 +249,7 @@ async function loadLogs({ silent = false } = {}) {
 function setActionState(busy) {
   state.actionLoading = busy;
   document.querySelectorAll("[data-action]").forEach((button) => {
-    button.disabled = busy;
+    button.disabled = busy || !state.taskConfigured;
   });
 }
 
@@ -246,7 +257,7 @@ async function runAction(action) {
   if (state.actionLoading) return;
   const labels = {
     start: "启动任务",
-    stop: "停止任务",
+    stop: "终止任务",
     restart: "重启任务",
     check: "立即检测",
     "force-login": "强制登录",
@@ -295,6 +306,23 @@ async function saveConfig(event) {
     showToast(error.message, true);
   } finally {
     submitButton.disabled = false;
+  }
+}
+
+async function detectPortal({ automatic = false } = {}) {
+  const previousValue = ui.portalInput.value;
+  ui.detectPortalButton.disabled = true;
+  try {
+    const result = await api("/api/detect-portal");
+    if (ui.portalInput.value === previousValue) {
+      ui.portalInput.value = result.data.portalUrl;
+      state.configDirty = true;
+      showToast("已自动获取校园门户地址，请保存并应用。");
+    }
+  } catch (error) {
+    if (!automatic) showToast(error.message, true);
+  } finally {
+    ui.detectPortalButton.disabled = false;
   }
 }
 
@@ -352,10 +380,18 @@ function bindEvents() {
     }
   });
   ui.downloadLogButton.addEventListener("click", downloadLog);
+  ui.detectPortalButton.addEventListener("click", () => detectPortal());
 }
 
 bindEvents();
-loadStatus();
+loadStatus().then(() => {
+  if (!ui.accountInput.value) {
+    ui.accountInput.focus();
+    if (!ui.portalInput.value) {
+      detectPortal({ automatic: true });
+    }
+  }
+});
 loadLogs();
 
 window.setInterval(() => {

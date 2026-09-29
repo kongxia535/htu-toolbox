@@ -43,6 +43,48 @@ textarea {
   font: inherit;
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.field-label-row label {
+  color: #34454d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.inline-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.inline-command svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.inline-command:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
 button {
   color: inherit;
 }

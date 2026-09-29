@@ -83,7 +83,7 @@ HTU campus network auto-login community package
 
 Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
 Runtime configuration and logs are intentionally excluded.
-Run Setup.cmd to install the auto-login watcher and local dashboard.
+Run Setup.cmd to open the local dashboard, then save your account settings there to install the watcher.
 "@
     [IO.File]::WriteAllText(
         (Join-Path $stageDirectory 'RELEASE.txt'),

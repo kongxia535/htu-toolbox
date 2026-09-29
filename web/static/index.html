@@ -99,7 +99,7 @@
           </button>
           <button class="action-button" data-action="stop" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-            <span>停止任务</span>
+            <span>终止任务</span>
           </button>
           <button id="downloadLogButton" class="action-button" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
@@ -118,7 +118,7 @@
         <div class="panel-heading">
           <div>
             <h2>账号配置</h2>
-            <p>密码留空时保留当前密文</p>
+            <p>首次保存后启动自动登录，后续留空密码可保留现有密文</p>
           </div>
         </div>
         <form id="configForm">
@@ -141,10 +141,16 @@
             <span>上网密码</span>
             <input id="passwordInput" name="password" type="password" autocomplete="current-password" placeholder="留空则不修改">
           </label>
-          <label>
-            <span>校园门户地址</span>
+          <div class="portal-field">
+            <div class="field-label-row">
+              <label for="portalInput">校园门户地址</label>
+              <button id="detectPortalButton" class="inline-command" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 1-2.3-5.7M20 4v6h-6"/></svg>
+                自动获取
+              </button>
+            </div>
             <textarea id="portalInput" name="portalUrl" rows="3" required></textarea>
-          </label>
+          </div>
           <div class="form-row interval-row">
             <label>
               <span>轮询间隔</span>

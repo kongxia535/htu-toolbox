@@ -29,6 +29,7 @@ PID_PATH = RUNTIME_DIR / "dashboard.pid"
 INSTALL_SCRIPT = ROOT_DIR / "scripts" / "Install-CampusNetAutoLogin.ps1"
 STOP_SCRIPT = ROOT_DIR / "scripts" / "Stop-CampusNetAutoLogin.ps1"
 WATCHER_SCRIPT = ROOT_DIR / "scripts" / "CampusNetAutoLogin.ps1"
+DETECT_PORTAL_SCRIPT = ROOT_DIR / "scripts" / "Detect-CampusPortal.ps1"
 TASK_NAME = "HTU-CampusNet-AutoLogin"
 TOKEN_PLACEHOLDER = "{{HTU_TOKEN}}"
 MAX_LOG_LINES = 1000
@@ -154,7 +155,20 @@ def task_status() -> dict[str, Any]:
     script = rf"""
 $ErrorActionPreference = 'Stop'
 try {{
-    $task = Get-ScheduledTask -TaskName '{TASK_NAME}'
+    $task = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue
+    if ($null -eq $task) {{
+        [pscustomobject]@{{
+            ok = $true
+            state = 'NotInstalled'
+            watcherCount = 0
+            processIds = @()
+            restartCount = 0
+            restartInterval = ''
+            repeatInterval = ''
+            autoStart = $false
+        }} | ConvertTo-Json -Compress
+        return
+    }}
     $info = Get-ScheduledTaskInfo -TaskName '{TASK_NAME}'
     $repeatTriggers = @($task.Triggers | Where-Object {{
         -not [string]::IsNullOrWhiteSpace([string]$_.Repetition.Interval)
@@ -255,6 +269,24 @@ def network_status() -> dict[str, Any]:
     return {"online": False, "probe": "none", "errors": errors}
 
 
+def detect_portal_url() -> dict[str, str]:
+    output = run_powershell_script(DETECT_PORTAL_SCRIPT, [], timeout=35).strip()
+    if not output:
+        raise DashboardError(
+            "未检测到校园门户重定向。当前网络可能已经认证，请断开认证后重试，或手动粘贴门户地址。"
+        )
+    portal_url = output.splitlines()[-1].strip()
+    parsed = urlparse(portal_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "10.101.2.194"
+        or parsed.port != 6060
+        or parsed.path != "/portal.do"
+    ):
+        raise DashboardError("自动检测返回了不受信任的门户地址。")
+    return {"portalUrl": portal_url}
+
+
 def get_status() -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=2) as executor:
         task_future = executor.submit(task_status)
@@ -346,6 +378,8 @@ def validate_config_update(payload: dict[str, Any]) -> dict[str, Any]:
         raise DashboardError("开机自启设置必须是布尔值。")
     if password and len(password) > 128:
         raise DashboardError("密码长度不能超过 128 个字符。")
+    if not password and not existing.get("password"):
+        raise DashboardError("首次配置必须输入上网密码。")
 
     return {
         "account": account,
@@ -509,6 +543,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/status":
                 self._require_api_access()
                 self._send_json(HTTPStatus.OK, {"ok": True, "data": get_status()})
+                return
+
+            if parsed.path == "/api/detect-portal":
+                self._require_api_access()
+                self._send_json(HTTPStatus.OK, {"ok": True, "data": detect_portal_url()})
                 return
 
             if parsed.path == "/api/logs":
