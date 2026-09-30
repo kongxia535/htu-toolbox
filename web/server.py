@@ -301,7 +301,6 @@ def get_status() -> dict[str, Any]:
             network = {"online": False, "probe": "none", "errors": [str(error)]}
 
     config = load_config()
-    log_lines = read_log_tail(20)
     config_summary = {
         "account": config.get("account", ""),
         "operator": config.get("operator", ""),
@@ -317,10 +316,6 @@ def get_status() -> dict[str, Any]:
         "task": task,
         "network": network,
         "config": config_summary,
-        "log": {
-            "lastLines": log_lines,
-            "lastWriteTime": LOG_PATH.stat().st_mtime if LOG_PATH.exists() else None,
-        },
     }
 
 
@@ -554,13 +549,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._require_api_access()
                 query = parse_qs(parsed.query)
                 tail = int(query.get("tail", ["250"])[0])
+                log_lines = read_log_tail(tail)
                 self._send_json(
                     HTTPStatus.OK,
                     {
                         "ok": True,
                         "data": {
-                            "lines": read_log_tail(tail),
+                            "lines": log_lines,
                             "path": str(LOG_PATH),
+                            "lastWriteTime": LOG_PATH.stat().st_mtime if LOG_PATH.exists() else None,
                         },
                     },
                 )

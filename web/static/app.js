@@ -36,6 +36,8 @@ const ui = {
   logTail: byId("logTail"),
   logOutput: byId("logOutput"),
   logMeta: byId("logMeta"),
+  logPanel: byId("logPanel"),
+  toggleLogButton: byId("toggleLogButton"),
   downloadLogButton: byId("downloadLogButton"),
   toast: byId("toast"),
 };
@@ -43,6 +45,7 @@ const ui = {
 const state = {
   statusLoading: false,
   logsLoading: false,
+  logsController: null,
   actionLoading: false,
   taskConfigured: false,
   configInitialized: false,
@@ -75,7 +78,7 @@ async function api(path, options = {}) {
   if (options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json; charset=utf-8");
   }
-  const response = await fetch(path, { ...options, headers });
+  const response = await fetch(path, { cache: "no-store", ...options, headers });
   const contentType = response.headers.get("content-type") || "";
   let payload;
   if (contentType.includes("application/json")) {
@@ -205,15 +208,15 @@ function updateStatus(data) {
   ui.passwordConfigured.parentElement.classList.toggle("set", passwordSet);
   ui.passwordInput.required = !passwordSet;
   ui.passwordInput.placeholder = passwordSet ? "留空则不修改" : "首次配置必填";
-
-  if (Array.isArray(data.log?.lastLines) && state.logsLoading === false) {
-    renderLogs(data.log.lastLines);
-  }
 }
 
 function renderLogs(lines) {
-  ui.logOutput.textContent = lines.length ? lines.join("\n") : "暂无日志";
-  ui.logOutput.scrollTop = ui.logOutput.scrollHeight;
+  const text = lines.length ? lines.join("\n") : "暂无日志";
+  if (ui.logOutput.textContent === text) return;
+  const atBottom = ui.logOutput.scrollHeight - ui.logOutput.scrollTop - ui.logOutput.clientHeight < 32;
+  const previousScroll = ui.logOutput.scrollTop;
+  ui.logOutput.textContent = text;
+  ui.logOutput.scrollTop = atBottom ? ui.logOutput.scrollHeight : previousScroll;
 }
 
 async function loadStatus({ silent = false } = {}) {
@@ -232,18 +235,48 @@ async function loadStatus({ silent = false } = {}) {
   }
 }
 
-async function loadLogs({ silent = false } = {}) {
-  if (state.logsLoading) return;
+async function loadLogs({ silent = false, force = false } = {}) {
+  if (state.logsLoading && !force) return;
+  state.logsController?.abort();
+  const controller = new AbortController();
+  state.logsController = controller;
   state.logsLoading = true;
+  const timeout = window.setTimeout(() => controller.abort(), 12000);
   try {
-    const result = await api(`/api/logs?tail=${encodeURIComponent(ui.logTail.value)}`);
-    renderLogs(result.data.lines || []);
-    ui.logMeta.textContent = `${result.data.path} · ${result.data.lines.length} 行`;
+    const result = await api(`/api/logs?tail=${encodeURIComponent(ui.logTail.value)}`, {
+      signal: controller.signal,
+    });
+    if (state.logsController !== controller) return;
+    const lines = result.data.lines || [];
+    renderLogs(lines);
+    const written = result.data.lastWriteTime
+      ? ` · 最后写入 ${formatDate(result.data.lastWriteTime * 1000)}`
+      : "";
+    ui.logMeta.textContent = `${result.data.path} · ${lines.length} 行${written}`;
   } catch (error) {
-    if (!silent) showToast(error.message, true);
+    if (state.logsController !== controller) return;
+    const message = controller.signal.aborted ? "日志请求超时，请稍后重试" : error.message;
+    ui.logMeta.textContent = `日志更新失败：${message}`;
+    if (!silent) showToast(message, true);
   } finally {
-    state.logsLoading = false;
+    window.clearTimeout(timeout);
+    if (state.logsController === controller) {
+      state.logsLoading = false;
+      state.logsController = null;
+    }
   }
+}
+
+function setLogsCollapsed(collapsed) {
+  ui.logPanel.classList.toggle("collapsed", collapsed);
+  ui.toggleLogButton.setAttribute("aria-expanded", String(!collapsed));
+  ui.toggleLogButton.textContent = collapsed ? "展开日志" : "收起日志";
+  try {
+    localStorage.setItem("htu-logs-collapsed", String(collapsed));
+  } catch {
+    // Storage may be unavailable in a restricted browser context.
+  }
+  if (!collapsed) loadLogs({ silent: true, force: true });
 }
 
 function setActionState(busy) {
@@ -270,7 +303,7 @@ async function runAction(action) {
       body: JSON.stringify({ action }),
     });
     showToast(result.message || "操作已完成");
-    await Promise.all([loadStatus(), loadLogs()]);
+    await Promise.all([loadStatus(), loadLogs({ force: true })]);
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -301,7 +334,7 @@ async function saveConfig(event) {
     ui.passwordInput.value = "";
     state.configDirty = false;
     showToast(result.message || "配置已更新");
-    await Promise.all([loadStatus(), loadLogs()]);
+    await Promise.all([loadStatus(), loadLogs({ force: true })]);
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -353,7 +386,10 @@ async function downloadLog() {
 }
 
 function bindEvents() {
-  ui.refreshButton.addEventListener("click", () => loadStatus());
+  ui.refreshButton.addEventListener("click", () => {
+    loadStatus();
+    loadLogs({ force: true });
+  });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => runAction(button.dataset.action));
   });
@@ -372,11 +408,14 @@ function bindEvents() {
     ui.intervalInput.value = Math.min(3600, Number(ui.intervalInput.value || 10) + 5);
     state.configDirty = true;
   });
-  ui.logTail.addEventListener("change", () => loadLogs());
+  ui.logTail.addEventListener("change", () => loadLogs({ force: true }));
+  ui.toggleLogButton.addEventListener("click", () => {
+    setLogsCollapsed(!ui.logPanel.classList.contains("collapsed"));
+  });
   ui.autoRefresh.addEventListener("change", () => {
     if (ui.autoRefresh.checked) {
       loadStatus();
-      loadLogs();
+      loadLogs({ force: true });
     }
   });
   ui.downloadLogButton.addEventListener("click", downloadLog);
@@ -384,6 +423,13 @@ function bindEvents() {
 }
 
 bindEvents();
+try {
+  if (localStorage.getItem("htu-logs-collapsed") === "true") {
+    setLogsCollapsed(true);
+  }
+} catch {
+  // Use the expanded default if browser storage is unavailable.
+}
 loadStatus().then(() => {
   if (!ui.accountInput.value) {
     ui.accountInput.focus();
@@ -404,6 +450,6 @@ window.setInterval(() => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     loadStatus({ silent: true });
-    loadLogs({ silent: true });
+    if (ui.autoRefresh.checked) loadLogs({ silent: true });
   }
 });

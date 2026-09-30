@@ -192,7 +192,7 @@
         </form>
       </section>
 
-      <section class="panel log-panel">
+      <section id="logPanel" class="panel log-panel">
         <div class="panel-heading log-heading">
           <div>
             <h2>运行日志</h2>
@@ -209,6 +209,7 @@
               <option value="500">500 行</option>
               <option value="1000">1000 行</option>
             </select>
+            <button id="toggleLogButton" class="button log-toggle" type="button" aria-controls="logOutput" aria-expanded="true">收起日志</button>
           </div>
         </div>
         <pre id="logOutput" class="log-output" aria-live="polite"></pre>

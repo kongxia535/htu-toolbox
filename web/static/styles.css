@@ -329,6 +329,18 @@ main {
   overflow: hidden;
 }
 
+.log-panel.collapsed {
+  height: auto;
+}
+
+.log-panel.collapsed .log-heading {
+  border-bottom: 0;
+}
+
+.log-panel.collapsed .log-output {
+  display: none;
+}
+
 .panel-heading {
   display: flex;
   align-items: flex-start;
@@ -597,10 +609,19 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
 }
 
+.log-heading > div:first-child {
+  min-width: 0;
+}
+
+#logMeta {
+  overflow-wrap: anywhere;
+}
+
 .log-tools {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .auto-refresh {
@@ -622,6 +643,13 @@ textarea:focus {
 .log-tools select {
   width: 92px;
   height: 34px;
+}
+
+.log-toggle {
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .log-output {
@@ -741,7 +769,7 @@ textarea:focus {
 
   .log-tools {
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   .log-output {
@@ -751,5 +779,9 @@ textarea:focus {
 
   .log-panel {
     height: 380px;
+  }
+
+  .log-panel.collapsed {
+    height: auto;
   }
 }
