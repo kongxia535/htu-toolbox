@@ -121,14 +121,16 @@ function Invoke-CurlRequest {
         if (-not [string]::IsNullOrWhiteSpace($HostHeader)) {
             $arguments += @('--header', "Host: $HostHeader")
         }
-        $arguments += $Url
+        # Keep the authentication URL/password out of the process command line.
+        $arguments += @('--config', '-')
+        $curlConfig = 'url = "{0}"' -f $Url.Replace('\', '\\').Replace('"', '\"')
 
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             # Windows PowerShell 5.1 can turn native stderr into a terminating error.
             # curl timeouts are expected while offline, so capture them as data.
             $ErrorActionPreference = 'Continue'
-            $statusText = & $script:CurlExe @arguments 2>&1
+            $statusText = $curlConfig | & $script:CurlExe @arguments 2>&1
             $exitCode = $LASTEXITCODE
         }
         finally {
@@ -140,7 +142,7 @@ function Invoke-CurlRequest {
                 Status   = ''
                 RedirectUrl = ''
                 Body     = ''
-                Error    = ($statusText -join [Environment]::NewLine)
+                Error    = "curl failed with exit code $exitCode"
             }
         }
 
@@ -165,20 +167,13 @@ function Invoke-CurlRequest {
 
 function Test-InternetOnline {
     try {
-    $cloudflare = Invoke-CurlRequest -Url 'http://1.1.1.1/cdn-cgi/trace' -HostHeader '1.1.1.1'
-    if ($cloudflare.Success -and $cloudflare.Status -eq '301' -and
-        $cloudflare.Body -match '(?i)cloudflare') {
+    $microsoft = Invoke-CurlRequest -Url 'http://www.msftconnecttest.com/connecttest.txt'
+    if ($microsoft.Success -and $microsoft.Status -eq '200' -and
+        $microsoft.Body.Trim() -eq 'Microsoft Connect Test') {
         return $true
     }
-
-    $baidu = Invoke-CurlRequest -Url 'http://182.61.200.6/' -HostHeader 'www.baidu.com'
-    if ($baidu.Success -and $baidu.Status -eq '200' -and
-        $baidu.Body -match '(?i)STATUS\s+OK') {
-        return $true
-    }
-
-    $aliDns = Invoke-CurlRequest -Url 'http://223.5.5.5/'
-    if ($aliDns.Success -and $aliDns.Status -eq '404') {
+    $google = Invoke-CurlRequest -Url 'http://connectivitycheck.gstatic.com/generate_204'
+    if ($google.Success -and $google.Status -eq '204' -and [string]::IsNullOrWhiteSpace($google.Body)) {
         return $true
     }
 
@@ -267,8 +262,10 @@ function Invoke-CampusLogin {
 
     $portalUrl = Get-PortalUrl -Config $Config
     $portalUri = [Uri]$portalUrl
-    if ($portalUri.Host -ne '10.101.2.194' -or $portalUri.Port -ne 6060) {
-        throw "Unexpected portal host in URL: $portalUrl"
+    if ($portalUri.Scheme -notin @('http', 'https') -or $portalUri.Host -ne '10.101.2.194' -or
+        $portalUri.Port -ne 6060 -or $portalUri.AbsolutePath -ne '/portal.do' -or
+        -not [string]::IsNullOrEmpty($portalUri.UserInfo) -or -not [string]::IsNullOrEmpty($portalUri.Fragment)) {
+        throw 'Unsupported campus portal URL.'
     }
 
     $baseUrl = '{0}://{1}' -f $portalUri.Scheme, $portalUri.Authority
@@ -328,12 +325,11 @@ function Invoke-CampusLogin {
         $loginResult = $response.Body | ConvertFrom-Json
     }
     catch {
-        throw "Login response is not valid JSON: $($response.Body)"
+        throw 'Login response is not valid JSON.'
     }
 
     if ([string]$loginResult.code -ne '0') {
-        $message = [string]$loginResult.message
-        throw "Campus portal rejected login (code=$($loginResult.code)): $message"
+        throw "Campus portal rejected login (code=$($loginResult.code)). Check account and operator."
     }
 
     return $loginResult
@@ -351,7 +347,15 @@ function Invoke-WatcherLoop {
     Write-AutoLoginLog "Watcher started; interval=${interval}s; config=$ConfigPath"
 
     $failedLoginCount = 0
+    $hashProvider = [Security.Cryptography.SHA256]::Create()
+    try {
+        $configIdentity = [BitConverter]::ToString($hashProvider.ComputeHash([Text.Encoding]::UTF8.GetBytes([IO.Path]::GetFullPath($ConfigPath).ToLowerInvariant()))).Replace('-', '')
+    }
+    finally { $hashProvider.Dispose() }
+    $loginMutex = New-Object System.Threading.Mutex -ArgumentList $false, ('Local\HTU-CampusLogin-' + $configIdentity)
+    try {
     while ($true) {
+        $iterationSucceeded = $true
         $sleepSeconds = $interval
         try {
             $online = if ($ForceLogin) { $false } else { Test-InternetOnline }
@@ -369,17 +373,33 @@ function Invoke-WatcherLoop {
                 $script:LastOnlineState = $false
 
                 try {
+                    $ownsMutex = $false
+                    try { $ownsMutex = $loginMutex.WaitOne(0) }
+                    catch [Threading.AbandonedMutexException] { $ownsMutex = $true }
+                    if (-not $ownsMutex) {
+                        throw 'Another login request is running. Try again shortly.'
+                    }
+                    try {
                     $plainPassword = Get-PlainPassword -Config $config
                     try {
                         Invoke-CampusLogin -Config $config -PlainPassword $plainPassword | Out-Null
                         Write-AutoLoginLog 'Campus login request succeeded.'
+                        if (Test-InternetOnline) {
+                            Write-AutoLoginLog 'Internet connectivity verified.'
+                        }
+                        else {
+                            Write-AutoLoginLog 'Authentication accepted; Internet verification is pending.'
+                        }
                         $failedLoginCount = 0
                     }
                     finally {
                         $plainPassword = $null
                     }
+                    }
+                    finally { $loginMutex.ReleaseMutex() }
                 }
                 catch {
+                    $iterationSucceeded = $false
                     Write-AutoLoginLog "Login attempt failed: $($_.Exception.Message)"
                     $failedLoginCount++
                     $backoffLevel = [Math]::Min($failedLoginCount, 3)
@@ -388,15 +408,21 @@ function Invoke-WatcherLoop {
             }
         }
         catch {
+            $iterationSucceeded = $false
             Write-AutoLoginLog "Watcher iteration failed but will continue: $($_.Exception.Message)"
         }
 
         if ($Once) {
+            if (-not $iterationSucceeded) {
+                throw 'Login check failed. See the log for the result.'
+            }
             break
         }
 
         Start-Sleep -Seconds $sleepSeconds
     }
+    }
+    finally { $loginMutex.Dispose() }
 }
 
 try {
@@ -408,7 +434,7 @@ try {
 catch {
     Write-AutoLoginLog "Watcher stopped with error: $($_.Exception.Message)"
     if ($Once -or $ShowStatus) {
-        Write-Error $_
+        Write-Error $_ -ErrorAction Continue
     }
     exit 1
 }

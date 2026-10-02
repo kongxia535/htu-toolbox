@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub static INDEX_URL_REGEX: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r#""(http://.*)&url=""#).unwrap());
+    LazyLock::new(|| regex::Regex::new(r#"https?://[^\s"'<>]+/portal\.do\?[^\s"'<>]+"#).unwrap());
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Operator {
@@ -20,6 +20,8 @@ pub enum Operator {
     Unicom,
     #[serde(rename = "dx")]
     Telecom,
+    #[serde(rename = "hsd")]
+    Campus,
 }
 
 impl AsRef<str> for Operator {
@@ -28,6 +30,7 @@ impl AsRef<str> for Operator {
             Operator::Mobie => "yd",
             Operator::Unicom => "lt",
             Operator::Telecom => "dx",
+            Operator::Campus => "hsd",
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for Operator {
             "yd" => Ok(Operator::Mobie),
             "lt" => Ok(Operator::Unicom),
             "dx" => Ok(Operator::Telecom),
+            "hsd" => Ok(Operator::Campus),
             _ => Err(()),
         }
     }
@@ -66,18 +70,18 @@ impl AuthRequest {
     pub fn create(index_url: Option<&str>) -> Result<Self> {
         let index_data = http::curl(
             Request::builder(index_url.unwrap_or("http://192.168.1.1"))
-                .timeout(Duration::from_millis(100))
-                .ignore_timeout(),
+                .timeout(Duration::from_secs(5)),
         )?;
         let index_content = String::from_utf8(index_data.data)?;
         let redirect_url = match INDEX_URL_REGEX
             .captures(index_content.as_ref())
-            .and_then(|caps| caps.get(1).map(|m| m.as_str().trim_matches('"')))
+            .and_then(|caps| caps.get(0).map(|m| m.as_str()))
         {
             Some(r) => r,
             None => return Err(crate::Error::InvalidIndexContent(index_content)),
         };
-        let url = Url::parse(redirect_url)?;
+        let decoded = redirect_url.replace("&amp;", "&");
+        let url = validate_portal_url(&decoded)?;
         Ok(Self {
             base_url: format!(
                 "{}://{}:{}",
@@ -100,21 +104,16 @@ impl AuthRequest {
     ) -> crate::Result<AuthResponse> {
         let mut url = Url::from_str(&format!("{}/quickauth.do", self.base_url))?;
         let mut userid = userid.as_ref().to_owned();
-        userid.push('@');
-        userid.push_str(operator.as_ref());
+        if !userid.contains('@') {
+            userid.push('@');
+            userid.push_str(operator.as_ref());
+        }
         url.query_pairs_mut()
             .extend_pairs(&self.params)
             .append_pair("userid", &userid)
             .append_pair("passwd", passwd.as_ref());
 
-        let resp = http::curl(url.as_str())?;
-        let data = serde_json::from_slice(&resp.data)
-            .map_err(|e| 
-                crate::Error::other(
-                    format!("{e}: {}", String::from_utf8_lossy(&resp.data).as_ref())
-                )
-            )?;
-        Ok(data)
+        Ok(http::curl_json(url.as_str())?.data)
     }
 }
 
@@ -131,17 +130,76 @@ impl LogoutResponse {
 }
 
 pub fn ping() -> std::io::Result<()> {
-    use std::{
-        io::{Read, Write},
-        net::TcpStream,
-    };
-    let mut socket = TcpStream::connect(("www.baidu.com", 80))?;
-    socket.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
-    socket.set_write_timeout(Some(std::time::Duration::from_millis(500)))?;
-    socket.write_all(b"GET / HTTP/1.0\r\n\r\n")?;
-    let mut buffer = [0; 1];
-    socket.read_exact(&mut buffer)?;
-    Ok(())
+    for (url, expected) in [
+        (
+            "http://www.msftconnecttest.com/connecttest.txt",
+            Some(&b"Microsoft Connect Test"[..]),
+        ),
+        ("http://connectivitycheck.gstatic.com/generate_204", None),
+    ] {
+        if let Ok(response) = http::curl(Request::builder(url).timeout(Duration::from_secs(3))) {
+            if probe_is_online(response.code, &response.data, expected) {
+                return Ok(());
+            }
+        }
+    }
+    Err(std::io::Error::other(
+        "Internet probe failed or captive portal intercepted it",
+    ))
+}
+
+pub fn probe_is_online(code: u32, body: &[u8], expected: Option<&[u8]>) -> bool {
+    match expected {
+        Some(expected) => code == 200 && body == expected,
+        None => code == 204 && body.is_empty(),
+    }
+}
+
+pub fn validate_portal_url(value: &str) -> Result<Url> {
+    let url = Url::parse(value)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str() != Some("10.101.2.194")
+        || url.port_or_known_default() != Some(6060)
+        || url.path() != "/portal.do"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(crate::Error::other("Unsupported campus portal URL"));
+    }
+    Ok(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn captive_pages_are_not_online() {
+        assert!(!probe_is_online(302, b"login", None));
+        assert!(!probe_is_online(
+            200,
+            b"<html>login</html>",
+            Some(b"Microsoft Connect Test")
+        ));
+        assert!(probe_is_online(
+            200,
+            b"Microsoft Connect Test",
+            Some(b"Microsoft Connect Test")
+        ));
+        assert!(probe_is_online(204, b"", None));
+    }
+    #[test]
+    fn portal_validation_rejects_other_destinations() {
+        assert!(validate_portal_url("http://10.101.2.194:6060/portal.do?test=1").is_ok());
+        for url in [
+            "http://8.8.8.8:6060/portal.do",
+            "http://10.101.2.194:80/portal.do",
+            "http://10.101.2.194:6060/nope",
+            "http://user:pass@10.101.2.194:6060/portal.do",
+        ] {
+            assert!(validate_portal_url(url).is_err());
+        }
+    }
 }
 
 pub fn logout() -> Result<LogoutResponse> {

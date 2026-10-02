@@ -14,7 +14,7 @@ $childPidPath = Join-Path $runtimeDirectory 'campus-auto-login-child.pid'
 
 function Get-CampusProcessTree {
     $allProcesses = @(Get-CimInstance Win32_Process)
-    $watcherPattern = '-File\s+"?[^"\r\n]*[\\/]CampusNetAutoLogin\.ps1"?(?:\s|$)'
+    $watcherPattern = '-File\s+"?' + [regex]::Escape($watcherScript) + '"?(?:\s|$)'
     $launcherPattern = [regex]::Escape($launcherScript)
     $roots = @($allProcesses | Where-Object {
         (($_.Name -in @('powershell.exe', 'pwsh.exe')) -and $_.CommandLine -match $watcherPattern) -or

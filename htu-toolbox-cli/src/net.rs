@@ -17,10 +17,10 @@ pub struct NetAccArgs {
     #[clap(long, short, requires_all = ["password", "operator"])]
     pub id: Option<String>,
     /// 密码
-    #[clap(long, short)]
+    #[clap(long, short, requires_all = ["id", "operator"])]
     pub password: Option<String>,
     /// 运营商
-    #[clap(long, short)]
+    #[clap(long, short, requires_all = ["id", "password"])]
     pub operator: Option<OperatorArg>,
 }
 
@@ -35,6 +35,9 @@ pub enum OperatorArg {
     /// 中国电信
     #[clap(name = "dx")]
     Telecom,
+    /// 校园本地账号
+    #[clap(name = "hsd")]
+    Campus,
 }
 
 impl From<Operator> for OperatorArg {
@@ -43,6 +46,7 @@ impl From<Operator> for OperatorArg {
             Operator::Mobie => OperatorArg::Mobie,
             Operator::Unicom => OperatorArg::Unicom,
             Operator::Telecom => OperatorArg::Telecom,
+            Operator::Campus => OperatorArg::Campus,
         }
     }
 }
@@ -53,6 +57,7 @@ impl From<OperatorArg> for Operator {
             OperatorArg::Mobie => Operator::Mobie,
             OperatorArg::Unicom => Operator::Unicom,
             OperatorArg::Telecom => Operator::Telecom,
+            OperatorArg::Campus => Operator::Campus,
         }
     }
 }

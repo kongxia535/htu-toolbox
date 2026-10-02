@@ -1,455 +1,323 @@
+"use strict";
 const token = document.querySelector('meta[name="htu-token"]').content;
-const byId = (id) => document.getElementById(id);
-
-const ui = {
-  connectionPill: byId("connectionPill"),
-  connectionText: byId("connectionText"),
-  lastUpdate: byId("lastUpdate"),
-  refreshButton: byId("refreshButton"),
-  taskState: byId("taskState"),
-  taskHint: byId("taskHint"),
-  networkState: byId("networkState"),
-  networkHint: byId("networkHint"),
-  processState: byId("processState"),
-  processHint: byId("processHint"),
-  nextRun: byId("nextRun"),
-  lastRun: byId("lastRun"),
-  processIds: byId("processIds"),
-  restartPolicy: byId("restartPolicy"),
-  watchdogInterval: byId("watchdogInterval"),
-  autoStartStatus: byId("autoStartStatus"),
-  accountInput: byId("accountInput"),
-  operatorSelect: byId("operatorSelect"),
-  passwordInput: byId("passwordInput"),
-  portalInput: byId("portalInput"),
-  detectPortalButton: byId("detectPortalButton"),
-  intervalInput: byId("intervalInput"),
-  intervalDown: byId("intervalDown"),
-  intervalUp: byId("intervalUp"),
-  watchdogIntervalInput: byId("watchdogIntervalInput"),
-  restartCountInput: byId("restartCountInput"),
-  restartIntervalInput: byId("restartIntervalInput"),
-  autoStartInput: byId("autoStartInput"),
-  passwordConfigured: byId("passwordConfigured"),
-  configForm: byId("configForm"),
-  autoRefresh: byId("autoRefresh"),
-  logTail: byId("logTail"),
-  logOutput: byId("logOutput"),
-  logMeta: byId("logMeta"),
-  logPanel: byId("logPanel"),
-  toggleLogButton: byId("toggleLogButton"),
-  downloadLogButton: byId("downloadLogButton"),
-  toast: byId("toast"),
+const $ = (id) => document.getElementById(id);
+let configured = false,
+  busy = false,
+  dirty = false,
+  initialized = false,
+  loadingStatus = false;
+let logsController;
+const dirtyFields = new Set();
+const defaults = {
+  account: "",
+  operator: "lt",
+  portalUrl: "",
+  intervalSeconds: 10,
+  watchdogIntervalMinutes: 5,
+  restartCount: 999,
+  restartIntervalMinutes: 1,
+  autoStart: true,
 };
-
-const state = {
-  statusLoading: false,
-  logsLoading: false,
-  logsController: null,
-  actionLoading: false,
-  taskConfigured: false,
-  configInitialized: false,
-  configDirty: false,
+const fields = {
+  account: "accountInput",
+  operator: "operatorSelect",
+  portalUrl: "portalInput",
+  intervalSeconds: "intervalInput",
+  watchdogIntervalMinutes: "watchdogIntervalInput",
+  restartCount: "restartCountInput",
+  restartIntervalMinutes: "restartIntervalInput",
+  autoStart: "autoStartInput",
 };
-
-const operatorLabels = {
-  yd: "中国移动",
-  lt: "中国联通",
-  dx: "中国电信",
-  hsd: "校园本地账号",
-};
-
-function setConnection(kind, text) {
-  ui.connectionPill.className = `status-pill ${kind}`;
-  ui.connectionText.textContent = text;
+function toast(message, error = false) {
+  $("toast").textContent = message;
+  $("toast").classList.toggle("error", error);
+  $("toast").classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => $("toast").classList.remove("show"), 5500);
 }
-
-function showToast(message, isError = false) {
-  ui.toast.textContent = message;
-  ui.toast.classList.toggle("error", isError);
-  ui.toast.classList.add("show");
-  window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => ui.toast.classList.remove("show"), 4200);
-}
-
-async function api(path, options = {}) {
+async function api(path, { timeout = 20000, ...options } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const signal = options.signal || controller.signal;
   const headers = new Headers(options.headers || {});
   headers.set("X-HTU-Token", token);
-  if (options.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json; charset=utf-8");
+  if (options.body) headers.set("Content-Type", "application/json");
+  try {
+    const response = await fetch(path, {
+      ...options,
+      headers,
+      signal,
+      cache: "no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok)
+      throw new Error(payload.error || `请求失败 (${response.status})`);
+    return payload;
+  } catch (error) {
+    if (error.name === "AbortError")
+      throw new Error("请求超时，请稍后刷新状态确认结果。");
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  const response = await fetch(path, { cache: "no-store", ...options, headers });
-  const contentType = response.headers.get("content-type") || "";
-  let payload;
-  if (contentType.includes("application/json")) {
-    payload = await response.json();
-  } else {
-    payload = { ok: response.ok, message: await response.text() };
-  }
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error || `请求失败：HTTP ${response.status}`);
-  }
-  return payload;
 }
-
-function formatDate(value) {
-  if (!value) return "--";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
+function date(value) {
+  if (!value) return "—";
+  return new Date(
+    typeof value === "number" ? value * 1000 : value,
+  ).toLocaleTimeString("zh-CN", { hour12: false });
 }
-
-function formatTaskState(task) {
+function setBusy(value) {
+  busy = value;
+  $("configForm").setAttribute("aria-busy", String(value));
+  $("configForm")
+    .querySelectorAll("input,select,textarea,button")
+    .forEach((el) => (el.disabled = value));
+  document
+    .querySelectorAll("[data-action]")
+    .forEach((el) => (el.disabled = value || !configured));
+  $("saveButton").textContent = value ? "正在处理…" : "保存并连接";
+}
+function render(data) {
+  const { task = {}, network = {}, config = {}, platform = {} } = data;
+  configured = !!config.passwordConfigured && task.ok !== false;
+  const running = task.state === "Running";
   const labels = {
     Running: "运行中",
-    Ready: "已就绪",
-    Disabled: "已禁用",
-    Queued: "排队中",
+    Ready: "已暂停",
+    Disabled: "已暂停",
     NotInstalled: "未配置",
+    Unknown: "读取失败",
   };
-  return labels[task.state] || task.state || "未知";
-}
-
-function formatTaskResult(value) {
-  if (value === 267009) return "运行中";
-  if (value === 0) return "上次运行成功";
-  if (!value) return "暂无运行记录";
-  return `上次结果 0x${Number(value).toString(16).toUpperCase()}`;
-}
-
-function formatDuration(value) {
-  if (!value) return "--";
-  const match = String(value).match(/^P(?:([0-9]+)D)?T?(?:([0-9]+)H)?(?:([0-9]+)M)?$/);
-  if (!match) return String(value);
-  const parts = [];
-  if (match[1]) parts.push(`${match[1]} 天`);
-  if (match[2]) parts.push(`${match[2]} 小时`);
-  if (match[3]) parts.push(`${match[3]} 分钟`);
-  return parts.join(" ") || "--";
-}
-
-function updateStatus(data) {
-  const task = data.task || {};
-  const network = data.network || {};
-  const config = data.config || {};
-  const taskRunning = task.state === "Running";
-  const watcherRunning = Number(task.watcherCount || 0) > 0;
-  state.taskConfigured = task.state !== "NotInstalled";
-  setActionState(state.actionLoading);
-
-  ui.taskState.textContent = formatTaskState(task);
-  ui.taskHint.textContent = task.error || formatTaskResult(task.lastTaskResult);
-  ui.taskState.style.color = taskRunning ? "var(--success)" : task.ok === false ? "var(--danger)" : "var(--warning)";
-
-  ui.networkState.textContent = network.online ? "在线" : "未认证 / 离线";
-  ui.networkState.style.color = network.online ? "var(--success)" : "var(--danger)";
-  ui.networkHint.textContent = network.online ? network.probe : (network.errors?.[0] || "等待自动登录");
-
-  ui.processState.textContent = watcherRunning ? `${task.watcherCount} 个` : "未运行";
-  ui.processState.style.color = watcherRunning ? "var(--success)" : "var(--danger)";
-  ui.processHint.textContent = watcherRunning
-    ? "后台常驻正常"
-    : task.state === "Disabled"
-      ? "任务和看门狗已停止"
-      : task.state === "NotInstalled"
-        ? "请先保存账号配置"
-      : "等待看门狗拉起";
-
-  ui.nextRun.textContent = task.state === "Disabled" ? "--" : formatDate(task.nextRunTime);
-  ui.lastRun.textContent = `上次运行 ${formatDate(task.lastRunTime)}`;
-  ui.processIds.textContent = task.processIds?.length ? task.processIds.join(", ") : "--";
-  ui.restartPolicy.textContent = Number(task.restartCount) > 0
-    ? `${task.restartCount} 次 / 每 ${formatDuration(task.restartInterval)}`
-    : "已关闭";
-  ui.watchdogInterval.textContent = formatDuration(task.repeatInterval);
-  ui.autoStartStatus.textContent = task.autoStart ? "已开启" : "已关闭";
-  ui.lastUpdate.textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-
-  if (task.ok === false) {
-    setConnection("danger", "任务不可读");
-  } else if (task.state === "NotInstalled") {
-    setConnection("neutral", "等待配置");
-  } else if (taskRunning && watcherRunning) {
-    setConnection("success", "后台正常");
-  } else {
-    setConnection("warning", "需要处理");
-  }
-
-  if (!state.configInitialized) {
-    ui.accountInput.value = config.account || "";
-    ui.operatorSelect.value = config.operator || "lt";
-    ui.portalInput.value = config.portalUrl || "";
-    ui.intervalInput.value = config.intervalSeconds || 10;
-    ui.watchdogIntervalInput.value = config.watchdogIntervalMinutes ?? 5;
-    ui.restartCountInput.value = config.restartCount ?? 999;
-    ui.restartIntervalInput.value = config.restartIntervalMinutes ?? 1;
-    ui.autoStartInput.checked = config.autoStart !== false;
-    state.configInitialized = true;
-  } else if (!state.configDirty) {
-    ui.accountInput.value = config.account || ui.accountInput.value;
-    ui.operatorSelect.value = config.operator || ui.operatorSelect.value;
-    ui.portalInput.value = config.portalUrl || ui.portalInput.value;
-    ui.intervalInput.value = config.intervalSeconds || ui.intervalInput.value;
-    ui.watchdogIntervalInput.value = config.watchdogIntervalMinutes ?? ui.watchdogIntervalInput.value;
-    ui.restartCountInput.value = config.restartCount ?? ui.restartCountInput.value;
-    ui.restartIntervalInput.value = config.restartIntervalMinutes ?? ui.restartIntervalInput.value;
-    ui.autoStartInput.checked = config.autoStart !== false;
-  }
-
-  const passwordSet = Boolean(config.passwordConfigured);
-  ui.passwordConfigured.textContent = passwordSet ? "已保存加密密码" : "尚未保存密码";
-  ui.passwordConfigured.parentElement.classList.toggle("set", passwordSet);
-  ui.passwordInput.required = !passwordSet;
-  ui.passwordInput.placeholder = passwordSet ? "留空则不修改" : "首次配置必填";
-}
-
-function renderLogs(lines) {
-  const text = lines.length ? lines.join("\n") : "暂无日志";
-  if (ui.logOutput.textContent === text) return;
-  const atBottom = ui.logOutput.scrollHeight - ui.logOutput.scrollTop - ui.logOutput.clientHeight < 32;
-  const previousScroll = ui.logOutput.scrollTop;
-  ui.logOutput.textContent = text;
-  ui.logOutput.scrollTop = atBottom ? ui.logOutput.scrollHeight : previousScroll;
-}
-
-async function loadStatus({ silent = false } = {}) {
-  if (state.statusLoading) return;
-  state.statusLoading = true;
-  ui.refreshButton.disabled = true;
-  try {
-    const result = await api("/api/status");
-    updateStatus(result.data);
-  } catch (error) {
-    setConnection("danger", "连接失败");
-    if (!silent) showToast(error.message, true);
-  } finally {
-    state.statusLoading = false;
-    ui.refreshButton.disabled = false;
-  }
-}
-
-async function loadLogs({ silent = false, force = false } = {}) {
-  if (state.logsLoading && !force) return;
-  state.logsController?.abort();
-  const controller = new AbortController();
-  state.logsController = controller;
-  state.logsLoading = true;
-  const timeout = window.setTimeout(() => controller.abort(), 12000);
-  try {
-    const result = await api(`/api/logs?tail=${encodeURIComponent(ui.logTail.value)}`, {
-      signal: controller.signal,
-    });
-    if (state.logsController !== controller) return;
-    const lines = result.data.lines || [];
-    renderLogs(lines);
-    const written = result.data.lastWriteTime
-      ? ` · 最后写入 ${formatDate(result.data.lastWriteTime * 1000)}`
-      : "";
-    ui.logMeta.textContent = `${result.data.path} · ${lines.length} 行${written}`;
-  } catch (error) {
-    if (state.logsController !== controller) return;
-    const message = controller.signal.aborted ? "日志请求超时，请稍后重试" : error.message;
-    ui.logMeta.textContent = `日志更新失败：${message}`;
-    if (!silent) showToast(message, true);
-  } finally {
-    window.clearTimeout(timeout);
-    if (state.logsController === controller) {
-      state.logsLoading = false;
-      state.logsController = null;
+  $("taskState").textContent = labels[task.state] || "等待启动";
+  $("taskHint").textContent =
+    task.error || (configured ? "账号已配置" : "请先保存账号");
+  $("networkState").textContent = network.online
+    ? "在线"
+    : network.state === "captive"
+      ? "待认证"
+      : "未联网";
+  $("networkHint").textContent = network.online
+    ? "已确认互联网连接"
+    : network.errors?.[0] || "请检查校园网络";
+  $("processState").textContent = task.stopping
+    ? "停止中"
+    : Number(task.watcherCount) > 0
+      ? "运行中"
+      : "未运行";
+  $("processHint").textContent = task.processIds?.length
+    ? `PID ${task.processIds.join(", ")}`
+    : "未检测到后台任务";
+  $("nextRun").textContent = date(task.nextRunTime);
+  $("lastRun").textContent = task.lastRunTime
+    ? `上次 ${date(task.lastRunTime)}`
+    : "暂无检测记录";
+  $("connectionText").textContent =
+    task.ok === false
+      ? "后台状态读取失败"
+      : running
+        ? "自动登录已开启"
+        : configured
+          ? "自动登录已暂停"
+          : "等待账号配置";
+  $("connectionPill").className =
+    `status-pill ${task.ok === false ? "danger" : running ? "success" : "neutral"}`;
+  $("lastUpdate").textContent =
+    `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
+  if (task.lastResult?.message)
+    $("lastResult").textContent = task.lastResult.message;
+  $("platformBadge").textContent = platform.name || "本地服务";
+  $("windowsOptions").hidden = platform.backend !== "scheduled-task";
+  $("platformHint").textContent =
+    platform.autostartHint || "服务仅在本机运行。";
+  $("storageHint").textContent = "账号配置保存在本机，密码加密存储。";
+  $("passwordConfigured").textContent = config.passwordConfigured
+    ? "已保存 · 留空保留"
+    : "首次配置必填";
+  $("passwordInput").required = !config.passwordConfigured;
+  if ((!initialized || !dirty) && !busy) {
+    for (const [key, id] of Object.entries(fields)) {
+      if (dirtyFields.has(id)) continue;
+      const value = config[key] ?? defaults[key];
+      if (key === "autoStart") $(id).checked = value;
+      else $(id).value = value;
     }
+    initialized = true;
   }
+  setBusy(busy);
 }
-
-function setLogsCollapsed(collapsed) {
-  ui.logPanel.classList.toggle("collapsed", collapsed);
-  ui.toggleLogButton.setAttribute("aria-expanded", String(!collapsed));
-  ui.toggleLogButton.textContent = collapsed ? "展开日志" : "收起日志";
+async function loadStatus() {
+  if (loadingStatus) return;
+  loadingStatus = true;
+  $("refreshButton").disabled = true;
   try {
-    localStorage.setItem("htu-logs-collapsed", String(collapsed));
-  } catch {
-    // Storage may be unavailable in a restricted browser context.
-  }
-  if (!collapsed) loadLogs({ silent: true, force: true });
-}
-
-function setActionState(busy) {
-  state.actionLoading = busy;
-  document.querySelectorAll("[data-action]").forEach((button) => {
-    button.disabled = busy || !state.taskConfigured;
-  });
-}
-
-async function runAction(action) {
-  if (state.actionLoading) return;
-  const labels = {
-    start: "启动任务",
-    stop: "终止任务",
-    restart: "重启任务",
-    check: "立即检测",
-    "force-login": "强制登录",
-  };
-  setActionState(true);
-  showToast(`${labels[action] || "操作"}执行中...`);
-  try {
-    const result = await api("/api/action", {
-      method: "POST",
-      body: JSON.stringify({ action }),
-    });
-    showToast(result.message || "操作已完成");
-    await Promise.all([loadStatus(), loadLogs({ force: true })]);
+    render((await api("/api/status", { timeout: 30000 })).data);
   } catch (error) {
-    showToast(error.message, true);
+    $("connectionText").textContent = "服务连接失败";
+    $("connectionPill").className = "status-pill danger";
   } finally {
-    setActionState(false);
+    loadingStatus = false;
+    $("refreshButton").disabled = false;
   }
 }
-
-async function saveConfig(event) {
-  event.preventDefault();
-  const submitButton = ui.configForm.querySelector('button[type="submit"]');
-  submitButton.disabled = true;
+async function loadLogs() {
+  logsController?.abort();
+  logsController = new AbortController();
+  const current = logsController;
+  const timer = setTimeout(() => current.abort(), 12000);
   try {
-    const payload = {
-      account: ui.accountInput.value.trim(),
-      operator: ui.operatorSelect.value,
-      password: ui.passwordInput.value,
-      portalUrl: ui.portalInput.value.trim(),
-      intervalSeconds: Number(ui.intervalInput.value),
-      watchdogIntervalMinutes: Number(ui.watchdogIntervalInput.value),
-      restartCount: Number(ui.restartCountInput.value),
-      restartIntervalMinutes: Number(ui.restartIntervalInput.value),
-      autoStart: ui.autoStartInput.checked,
-    };
+    const { data } = await api(`/api/logs?tail=${$("logTail").value}`, {
+      signal: current.signal,
+    });
+    if (logsController !== current) return;
+    const text = data.lines.length ? data.lines.join("\n") : "暂无记录";
+    const bottom =
+      $("logOutput").scrollHeight -
+        $("logOutput").scrollTop -
+        $("logOutput").clientHeight <
+      40;
+    $("logOutput").textContent = text;
+    if (bottom) $("logOutput").scrollTop = $("logOutput").scrollHeight;
+    $("logMeta").textContent =
+      `${data.lines.length} 行${data.lastWriteTime ? ` · ${date(data.lastWriteTime)}` : ""}`;
+  } catch (error) {
+    if (logsController === current) $("logMeta").textContent = error.message;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function markDirty(event) {
+  dirty = true;
+  dirtyFields.add(event.target.id);
+}
+$("configForm").addEventListener("input", markDirty);
+$("configForm").addEventListener("change", markDirty);
+$("configForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (busy) return;
+  const payload = { password: $("passwordInput").value };
+  for (const [key, id] of Object.entries(fields))
+    payload[key] =
+      key === "autoStart"
+        ? $(id).checked
+        : typeof defaults[key] === "number"
+          ? Number($(id).value)
+          : $(id).value.trim();
+  setBusy(true);
+  try {
     const result = await api("/api/config", {
       method: "POST",
       body: JSON.stringify(payload),
+      timeout: 80000,
     });
-    ui.passwordInput.value = "";
-    state.configDirty = false;
-    showToast(result.message || "配置已更新");
-    await Promise.all([loadStatus(), loadLogs({ force: true })]);
+    $("passwordInput").value = "";
+    dirty = false;
+    dirtyFields.clear();
+    toast(result.message);
+    await Promise.all([loadStatus(), loadLogs()]);
   } catch (error) {
-    showToast(error.message, true);
+    toast(error.message, true);
   } finally {
-    submitButton.disabled = false;
+    setBusy(false);
   }
-}
-
-async function detectPortal({ automatic = false } = {}) {
-  const previousValue = ui.portalInput.value;
-  ui.detectPortalButton.disabled = true;
+});
+document.querySelectorAll("[data-action]").forEach((button) =>
+  button.addEventListener("click", async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await api("/api/action", {
+        method: "POST",
+        body: JSON.stringify({ action: button.dataset.action }),
+        timeout: 90000,
+      });
+      $("lastResult").textContent = result.message;
+      toast(result.message);
+    } catch (error) {
+      $("lastResult").textContent = error.message;
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+      await Promise.all([loadStatus(), loadLogs()]);
+    }
+  }),
+);
+$("detectPortalButton").addEventListener("click", async () => {
+  const oldValue = $("portalInput").value;
+  $("detectPortalButton").disabled = true;
   try {
-    const result = await api("/api/detect-portal");
-    if (ui.portalInput.value === previousValue) {
-      ui.portalInput.value = result.data.portalUrl;
-      state.configDirty = true;
-      showToast("已自动获取校园门户地址，请保存并应用。");
+    const { data } = await api("/api/detect-portal");
+    if ($("portalInput").value === oldValue) {
+      $("portalInput").value = data.portalUrl;
+      dirty = true;
+      dirtyFields.add("portalInput");
+      toast("已获取门户地址，请保存配置。");
     }
   } catch (error) {
-    if (!automatic) showToast(error.message, true);
+    toast(error.message, true);
   } finally {
-    ui.detectPortalButton.disabled = false;
+    $("detectPortalButton").disabled = busy;
   }
-}
-
-async function downloadLog() {
-  ui.downloadLogButton.disabled = true;
+});
+$("refreshButton").addEventListener("click", () =>
+  Promise.all([loadStatus(), loadLogs()]),
+);
+$("logTail").addEventListener("change", loadLogs);
+$("toggleLogButton").addEventListener("click", () => {
+  const collapsed = $("logPanel").classList.toggle("collapsed");
+  $("toggleLogButton").textContent = collapsed ? "展开" : "收起";
+  $("toggleLogButton").setAttribute("aria-expanded", String(!collapsed));
+});
+$("downloadLogButton").addEventListener("click", async () => {
+  $("downloadLogButton").disabled = true;
   try {
     const response = await fetch("/api/download-log", {
       headers: { "X-HTU-Token": token },
+      signal: AbortSignal.timeout(12000),
     });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || `下载失败：HTTP ${response.status}`);
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+    if (!response.ok) throw new Error("日志导出失败。");
+    const url = URL.createObjectURL(await response.blob()),
+      link = document.createElement("a");
     link.href = url;
-    link.download = "campus-auto-login.log";
-    document.body.appendChild(link);
+    link.download = "htu-connect.log";
     link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) {
-    showToast(error.message, true);
+    toast(error.message, true);
   } finally {
-    ui.downloadLogButton.disabled = false;
-  }
-}
-
-function bindEvents() {
-  ui.refreshButton.addEventListener("click", () => {
-    loadStatus();
-    loadLogs({ force: true });
-  });
-  document.querySelectorAll("[data-action]").forEach((button) => {
-    button.addEventListener("click", () => runAction(button.dataset.action));
-  });
-  ui.configForm.addEventListener("submit", saveConfig);
-  ui.configForm.addEventListener("input", () => {
-    state.configDirty = true;
-  });
-  ui.configForm.addEventListener("change", () => {
-    state.configDirty = true;
-  });
-  ui.intervalDown.addEventListener("click", () => {
-    ui.intervalInput.value = Math.max(5, Number(ui.intervalInput.value || 10) - 5);
-    state.configDirty = true;
-  });
-  ui.intervalUp.addEventListener("click", () => {
-    ui.intervalInput.value = Math.min(3600, Number(ui.intervalInput.value || 10) + 5);
-    state.configDirty = true;
-  });
-  ui.logTail.addEventListener("change", () => loadLogs({ force: true }));
-  ui.toggleLogButton.addEventListener("click", () => {
-    setLogsCollapsed(!ui.logPanel.classList.contains("collapsed"));
-  });
-  ui.autoRefresh.addEventListener("change", () => {
-    if (ui.autoRefresh.checked) {
-      loadStatus();
-      loadLogs({ force: true });
-    }
-  });
-  ui.downloadLogButton.addEventListener("click", downloadLog);
-  ui.detectPortalButton.addEventListener("click", () => detectPortal());
-}
-
-bindEvents();
-try {
-  if (localStorage.getItem("htu-logs-collapsed") === "true") {
-    setLogsCollapsed(true);
-  }
-} catch {
-  // Use the expanded default if browser storage is unavailable.
-}
-loadStatus().then(() => {
-  if (!ui.accountInput.value) {
-    ui.accountInput.focus();
-    if (!ui.portalInput.value) {
-      detectPortal({ automatic: true });
-    }
+    $("downloadLogButton").disabled = false;
   }
 });
-loadLogs();
-
-window.setInterval(() => {
-  if (ui.autoRefresh.checked && document.visibilityState === "visible") {
-    loadStatus({ silent: true });
-    loadLogs({ silent: true });
-  }
-}, 5000);
-
+function theme(value) {
+  document.documentElement.dataset.theme = value;
+  $("themeButton").setAttribute(
+    "aria-label",
+    value === "dark" ? "切换浅色主题" : "切换深色主题",
+  );
+}
+try {
+  theme(
+    localStorage.getItem("htu-theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+  );
+} catch {
+  theme("light");
+}
+$("themeButton").addEventListener("click", () => {
+  const value =
+    document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  theme(value);
+  try {
+    localStorage.setItem("htu-theme", value);
+  } catch {}
+});
+setBusy(false);
+async function poll() {
+  if (document.visibilityState === "visible" && $("autoRefresh").checked)
+    await Promise.all([loadStatus(), loadLogs()]);
+  setTimeout(poll, 5000);
+}
+Promise.all([loadStatus(), loadLogs()]).finally(() => setTimeout(poll, 5000));
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    loadStatus({ silent: true });
-    if (ui.autoRefresh.checked) loadLogs({ silent: true });
-  }
+  if (document.visibilityState === "visible") loadStatus();
 });

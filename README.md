@@ -1,55 +1,131 @@
-# htu-toolbox
+# HTU Connect · 校园网助手
 
-河师大校园网登录工具。本 fork 在上游 Rust 命令行工具的基础上，增加了 Windows 断网自动登录、后台计划任务和本地网页控制台。
+河师大校园网自动登录工具。桌面端使用本地 Python 服务与响应式网页，Android 使用 Kotlin 原生应用。保留独立的 Rust 命令行工具。
 
-## Windows 自动登录
+## 平台与运行方式
 
-适用环境：Windows 10/11、Windows PowerShell 5.1、Python 3（安装时需加入 PATH）。网页自动登录功能不需要 Rust。
+| 平台 | 界面 | 自动登录与后台运行 | 密码保存 |
+| --- | --- | --- | --- |
+| Windows 10/11 | 本机网页 | Windows 计划任务、PowerShell watcher | 当前用户 DPAPI |
+| Linux | 本机网页 | Python watcher；可安装 systemd 用户服务 | Fernet 本机加密文件，权限 0600 |
+| macOS | 本机网页 | Python watcher；可安装 LaunchAgent | Fernet 本机加密文件，权限 0600 |
+| Android 8.0+ | Kotlin 原生界面 | 带通知的前台服务；可选择开机恢复 | Android Keystore AES-GCM |
 
-1. 从[本仓库 Releases](https://github.com/kongxia535/htu-toolbox/releases)下载 `htu-toolbox-community.zip` 并完整解压，或下载本仓库源码。
-2. 双击根目录的 `Setup.cmd`。它会安装并启动本地网页控制台，在浏览器打开 `http://127.0.0.1:8765/`。
-3. 首次使用时，在网页填写上网账号、密码、运营商及校园门户地址。可点击“自动获取”；若当前网络已认证或没有返回门户重定向，请手动粘贴完整的门户地址。
-4. 点击“保存并应用”安装并启动自动登录任务。以后再次运行 `Setup.cmd` 只会重新安装/打开控制台，不会重置已有账号配置。
+认证仅适用于设备连接河师大校园网络的情况。门户地址目前限定为 `http(s)://10.101.2.194:6060/portal.do`，需保留完整查询参数。公网探针返回预期内容才判断在线；认证通过与联网验证通过分别展示。
 
-控制台仅监听本机回环地址。页面可查看网络与计划任务状态、常驻进程、看门狗时间及运行日志，也可启动、终止、重启任务，立即检测或强制登录。账号配置里可以调整轮询间隔（默认 10 秒）、开机自启、看门狗间隔、自动重启次数和重启等待时间。停止任务会禁用其计划任务与看门狗，并结束对应的常驻进程；再次启动会恢复任务。
+### Windows
 
-探针以直接请求公网 IP 的方式检测连通性，不依赖普通 DNS 解析或系统代理；网络不可用或被校园门户拦截时尝试登录。登录失败会退避重试。门户地址自动获取仅识别项目支持的校园门户，不能保证在已认证或未连接校园网时成功。
+需要 Windows PowerShell 5.1、Python **3.10+**（加入 PATH）。网页和自动登录不需要 Rust。
 
-密码由当前 Windows 用户的 DPAPI 加密后写入 `runtime/campus-auto-login.json`；日志位于 `runtime/campus-auto-login.log`。`runtime/` 已被 Git 忽略，不应手动上传或分享。换电脑或换 Windows 用户时需重新配置密码。
+1. 完整解压源码或发布包，运行根目录 `Setup.cmd`。
+2. 本机浏览器打开控制台后，填写账号、运营商和密码，点击自动获取或粘贴完整门户地址。
+3. 点击“保存并连接”。后续保存时密码留空会保留已有密文。
 
-### 任务维护
-
-在项目根目录打开 PowerShell，可手动执行一次检测：
+控制台与自动登录是两个独立计划任务。自动恢复选项控制登录后的启动及看门狗触发。停止操作禁用任务并结束当前安装目录下的进程；重新启动会启用任务。
 
 ```powershell
+# 单次检测。失败返回非零退出码；不会修改常驻任务。
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\CampusNetAutoLogin.ps1 -Once -ShowStatus
-```
-
-查看计划任务：
-
-```powershell
-Get-ScheduledTask -TaskName HTU-CampusNet-AutoLogin
-Get-ScheduledTaskInfo -TaskName HTU-CampusNet-AutoLogin
-Get-ScheduledTask -TaskName HTU-CampusNet-Dashboard
-```
-
-卸载两个后台任务并保留加密配置及日志：
-
-```powershell
+# 卸载任务，保留账号与日志
 .\scripts\Uninstall-CampusNetAutoLogin.ps1
 .\scripts\Uninstall-WebDashboard.ps1
 ```
 
-如需同时删除自动登录配置和日志，可给第一条卸载命令加上 `-RemoveData`。仅重新安装网页控制台可运行 `.\scripts\Install-WebDashboard.ps1 -Port 8765`。网页控制台和自动登录探针是两个独立的计划任务。
+Windows 配置为 `runtime/campus-auto-login.json`。密码绑定当前 Windows 用户，换用户或设备后需要重新输入。
+
+### Linux / macOS
+
+需要 Python **3.10+**，不依赖 PowerShell。
+
+```bash
+bash scripts/start.sh
+```
+
+脚本建立 `.venv`、安装 `requirements.txt` 并启动本机控制台。默认端口 8765；可传 `--port 8877`。直接开发启动：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m web.server --open-browser
+```
+
+网页服务存活时，内部 watcher 持续检测与退避重试。开启“自动恢复登录”后，服务再次启动时恢复 watcher。**系统登录后自启**需要另外安装用户服务：先停止前台实例，避免端口冲突，再运行：
+
+```bash
+.venv/bin/python scripts/install-user-service.py
+# 停止并卸载用户服务，保留账号配置
+.venv/bin/python scripts/install-user-service.py --remove
+```
+
+Linux 要求可用的 systemd 用户会话；macOS 使用当前用户 LaunchAgent。网页仅监听回环地址，不提供局域网远程控制。可用 `HTU_RUNTIME_DIR` 指定本机数据目录。
+
+Linux/macOS 使用 `runtime/desktop-config.json` 和 `runtime/credential.key`。密钥与密文保存在同一设备，依靠用户文件权限保护，**不等同于硬件密钥库**；不要分享或提交整个 `runtime/`。加密文件不是 Windows DPAPI 配置，跨平台需要重新设置账号。
+
+### Android 原生 APK
+
+Android 源码在 `android/`，使用原生控件，不依赖 WebView、Python 或 Termux。
+
+1. 安装调试 APK，打开 **HTU Connect**，填写账号和门户地址。
+2. 保存并连接，允许通知。自动登录以可见前台服务运行，可在应用或通知中停止。
+3. 可开启“开机后恢复自动登录”。停止服务后不会因开机选项重新启动，需手动再次开启。
+
+联网请求优先使用 Wi-Fi 网络，避免未认证 Wi-Fi 时请求误走移动数据。部分厂商系统仍需手动允许后台运行；强制停止应用后需重新打开。应用禁止系统备份密码数据，Keystore 密钥不能随 APK 或配置迁移。HTTP 明文仅允许校园门户和指定探针域名。
+
+构建需要 JDK 17+、Android SDK 36 / Build Tools 36.0.0：
+
+```bash
+cd android
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+APK 在 `android/app/build/outputs/apk/debug/app-debug.apk`。调试签名用于安装验证；正式发布需由项目维护者配置自己的签名密钥，项目不保存密钥。
+
+版本信息统一配置在 `android/version.properties`，Gradle 和独立 SDK 构建使用同一版本号。
+
+Maven 不可用时，也可使用已安装的 Android SDK 与官方 Kotlin 2.1.20 编译器直接构建：
+
+```bash
+python3 scripts/build-android.py --sdk /path/to/android-sdk --kotlin /path/to/kotlinc
+```
+
+此方式生成并校验调试 APK：`dist/htu-connect-debug.apk`，需要 SDK Platform 36、Build Tools 36.0.0 和 JDK 17+。编译器安装包应校验官方 SHA-256；脚本不自动下载或关闭任何校验。可额外传 `--junit` 和 `--hamcrest` 指定 JUnit 4.13.2 与 Hamcrest jar，执行现有 Android 单元测试。
+
 
 ## Rust 命令行工具
 
-仓库保留上游的 Rust CLI，可单次登录/登出校园网；它与 Windows 网页自动登录任务互不依赖。已安装 Rust 工具链时，可从源码安装：
+Rust CLI 与网页/Android 配置独立。使用固定 Rust 1.90.0 及 libcurl 开发依赖，云环境使用 Rust 1.90 验证。
 
 ```bash
-cargo install htu-toolbox-cli --git https://github.com/kongxia535/htu-toolbox
+cargo build --workspace
+cargo run -p htu-toolbox-cli -- --help
+cargo run -p htu-toolbox-cli -- net set
+cargo run -p htu-toolbox-cli -- net login
+cargo run -p htu-toolbox-cli -- net logout
 ```
 
-运行 `htu-toolbox-cli`；首次启动会提示配置账号，之后启动时默认尝试登录。命令行工具的配置与 Windows 网页控制台的 `runtime/` 配置不是同一份。
+命令完成后直接退出，失败返回非零退出码；交互终端需要停留时使用 `--pause`。支持 `yd`、`lt`、`dx`、`hsd`。配置在系统配置目录下的 `htu-toolbox/config.toml`，目前 Rust CLI 仍以 TOML 保存密码，请保护此文件。
 
-欢迎通过 Issue 反馈问题或提交 PR。
+## 开发与验证
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+cargo test --workspace
+```
+
+Windows 另运行 `tests/Test-Watcher.ps1`，通过模拟认证检查单次执行结果。Android 执行上述 Gradle 测试与 lint。CI 配置在 `.github/workflows/verify.yml`，覆盖三个桌面系统及 Android 构建。
+
+```text
+web/config.py       参数校验、原子配置保存、桌面密码加密
+web/network.py      探针、门户发现、认证请求
+web/runtime.py      后台 watcher、操作互斥、平台适配
+web/windows.py      Windows 计划任务适配
+web/server.py       本机 HTTP/API 服务
+web/static/         响应式网页、深浅主题
+android/            原生应用、Keystore、前台服务
+htu-toolbox-lib/    Rust HTTP 与认证库
+htu-toolbox-cli/    Rust 命令行入口
+scripts/            平台安装、启动、停止与打包
+```
+
+配置、日志、PID 位于 Git 忽略的 `runtime/`；日志轮转，网页最多导出最近 1000 行。Windows 发布包可用 `scripts/Package-Release.ps1` 生成，不包括运行数据。

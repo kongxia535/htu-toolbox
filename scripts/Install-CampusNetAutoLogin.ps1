@@ -56,6 +56,13 @@ if ([string]::IsNullOrWhiteSpace($PortalUrl) -and (Test-Path -LiteralPath $Confi
 if ([string]::IsNullOrWhiteSpace($PortalUrl)) {
     throw 'PortalUrl is required on first install. Copy the complete campus portal URL from the browser.'
 }
+$portalUri = $null
+if (-not [Uri]::TryCreate($PortalUrl, [UriKind]::Absolute, [ref]$portalUri) -or
+    $portalUri.Scheme -notin @('http', 'https') -or $portalUri.Host -ne '10.101.2.194' -or
+    $portalUri.Port -ne 6060 -or $portalUri.AbsolutePath -ne '/portal.do' -or
+    -not [string]::IsNullOrEmpty($portalUri.UserInfo) -or -not [string]::IsNullOrEmpty($portalUri.Fragment)) {
+    throw 'PortalUrl must use the supported campus portal host, port and path.'
+}
 
 function Convert-SecureStringToPlainText {
     param([Security.SecureString]$SecureString)
@@ -129,8 +136,6 @@ $config = [ordered]@{
     autoStart = -not $DisableAutoStart.IsPresent
 }
 
-$config | ConvertTo-Json | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
-
 $scriptPath = Join-Path $PSScriptRoot 'CampusNetAutoLogin.ps1'
 if (-not (Test-Path -LiteralPath $scriptPath)) {
     throw "Watcher script not found: $scriptPath"
@@ -157,6 +162,30 @@ $watcherArguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass 
 $actionArguments = '"{0}" -- "{1}" {2}' -f $launcherScript, $powerShellExe, $watcherArguments
 
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$previousTaskXml = $null
+$previousTaskRunning = $false
+if ($null -ne $existingTask) {
+    $previousTaskXml = Export-ScheduledTask -TaskName $TaskName
+    $previousTaskRunning = $existingTask.State -eq 'Running'
+}
+
+# Resolve dependencies before replacing configuration. Replace on the same volume.
+$temporaryConfig = Join-Path $configDirectory ('.htu-config-' + [Guid]::NewGuid().ToString('N'))
+$hadConfig = Test-Path -LiteralPath $ConfigPath
+try {
+    $config | ConvertTo-Json | Set-Content -LiteralPath $temporaryConfig -Encoding UTF8
+    if (Test-Path -LiteralPath $ConfigPath) {
+        [IO.File]::Replace($temporaryConfig, $ConfigPath, "$ConfigPath.backup")
+    }
+    else {
+        [IO.File]::Move($temporaryConfig, $ConfigPath)
+    }
+}
+finally {
+    Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue
+}
+
+try {
 if ($null -ne $existingTask) {
     $stopScript = Join-Path $PSScriptRoot 'Stop-CampusNetAutoLogin.ps1'
     if (Test-Path -LiteralPath $stopScript) {
@@ -203,6 +232,27 @@ if ($triggers.Count -gt 0) {
 Register-ScheduledTask @registration | Out-Null
 
 Start-ScheduledTask -TaskName $TaskName
+}
+catch {
+    $installationError = $_
+    try {
+        if ($hadConfig -and (Test-Path -LiteralPath "$ConfigPath.backup")) {
+            [IO.File]::Replace("$ConfigPath.backup", $ConfigPath, $null)
+        }
+        elseif (-not $hadConfig) {
+            Remove-Item -LiteralPath $ConfigPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($previousTaskXml) {
+            Register-ScheduledTask -TaskName $TaskName -Xml $previousTaskXml -Force | Out-Null
+            if ($previousTaskRunning) { Start-ScheduledTask -TaskName $TaskName }
+        }
+        else {
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+    catch { Write-Warning 'Could not restore the previous task/configuration. Check the config backup and scheduled task.' }
+    throw $installationError
+}
 
 Write-Host 'Campus network auto-login task installed and started.'
 Write-Host "Task:   $TaskName"

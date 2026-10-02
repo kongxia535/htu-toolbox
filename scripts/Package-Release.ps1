@@ -56,8 +56,7 @@ $sensitivePatterns = @(
     ('A856' + '966869225'),
     ('b4:8c' + ':9d:ad:3f:0b'),
     ('10.104' + '.102.178'),
-    ('2d12d136' + 'af596fe'),
-    ('kong' + 'xia')
+    ('2d12d136' + 'af596fe')
 )
 
 try {
@@ -67,15 +66,17 @@ try {
     Copy-ProjectItem -RelativePath 'LICENSE'
     Copy-ProjectItem -RelativePath 'README.md'
     Copy-ProjectItem -RelativePath 'Cargo.toml'
+    Copy-ProjectItem -RelativePath 'Cargo.lock'
+    Copy-ProjectItem -RelativePath 'rust-toolchain.toml'
     Copy-ProjectItem -RelativePath 'Setup.cmd'
+    Copy-ProjectItem -RelativePath 'requirements.txt'
     Copy-ProjectItem -RelativePath 'htu-toolbox-cli' -Recurse
     Copy-ProjectItem -RelativePath 'htu-toolbox-lib' -Recurse
     Copy-ProjectItem -RelativePath 'scripts' -Recurse
 
     $webDestination = Join-Path $stageDirectory 'web'
     New-Item -ItemType Directory -Path $webDestination -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'web\server.py') -Destination $webDestination -Force
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'web\launcher.py') -Destination $webDestination -Force
+    Get-ChildItem -LiteralPath (Join-Path $repositoryRoot 'web') -Filter '*.py' | Copy-Item -Destination $webDestination -Force
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'web\static') -Destination $webDestination -Recurse -Force
 
     $releaseText = @"
@@ -83,7 +84,10 @@ HTU campus network auto-login community package
 
 Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
 Runtime configuration and logs are intentionally excluded.
-Run Setup.cmd to open the local dashboard, then save your account settings there to install the watcher.
+Windows: run Setup.cmd to open the local dashboard.
+Linux/macOS: run bash scripts/start.sh from this folder.
+Save your account settings in the dashboard to start automatic login.
+Android source and Gradle files are available in the GitHub source archive.
 "@
     [IO.File]::WriteAllText(
         (Join-Path $stageDirectory 'RELEASE.txt'),
@@ -95,6 +99,9 @@ Run Setup.cmd to open the local dashboard, then save your account settings there
         $_.Name -eq '__pycache__' -or $_.Extension -eq '.pyc'
     }
     foreach ($item in $cacheItems) {
+        if (-not (Test-Path -LiteralPath $item.FullName)) {
+            continue
+        }
         if ($item.PSIsContainer) {
             Remove-Item -LiteralPath $item.FullName -Recurse -Force
         }
@@ -122,8 +129,13 @@ Run Setup.cmd to open the local dashboard, then save your account settings there
         Remove-Item -LiteralPath $outputFullPath -Force
     }
 
-    $itemsToCompress = Get-ChildItem -LiteralPath $stageDirectory -Force | Select-Object -ExpandProperty FullName
-    Compress-Archive -LiteralPath $itemsToCompress -DestinationPath $outputFullPath -CompressionLevel Optimal
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory(
+        $stageDirectory,
+        $outputFullPath,
+        [IO.Compression.CompressionLevel]::Optimal,
+        $false
+    )
 
     $hash = Get-FileHash -LiteralPath $outputFullPath -Algorithm SHA256
     $hashPath = "$outputFullPath.sha256"

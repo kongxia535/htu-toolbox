@@ -18,6 +18,8 @@ $pythonExe = (& python -c "import sys; print(sys.executable)" 2>$null | Select-O
 if ([string]::IsNullOrWhiteSpace($pythonExe) -or -not (Test-Path -LiteralPath $pythonExe)) {
     throw 'Python 3 was not found in PATH.'
 }
+& $pythonExe -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) { throw 'Python 3.10 or newer is required.' }
 $pythonwExe = Join-Path (Split-Path -Parent $pythonExe) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonwExe)) {
     $pythonwExe = $pythonExe
@@ -55,7 +57,16 @@ Register-ScheduledTask `
     -Force | Out-Null
 
 Start-ScheduledTask -TaskName $TaskName
-Start-Sleep -Seconds 2
+$ready = $false
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
+        if ($response.StatusCode -eq 200 -and $response.Content -match 'HTU Connect') { $ready = $true; break }
+    }
+    catch {}
+    Start-Sleep -Milliseconds 500
+}
+if (-not $ready) { throw 'Dashboard did not become ready. Check runtime/campus-auto-login.log and the scheduled task.' }
 
 $url = "http://127.0.0.1:$Port/"
 Write-Host "Dashboard task installed: $TaskName"

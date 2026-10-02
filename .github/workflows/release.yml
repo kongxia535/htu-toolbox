@@ -1,0 +1,59 @@
+name: Publish Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release version
+        run: |
+          python3 - <<'PY'
+          import configparser, os, re
+          from pathlib import Path
+          tag = os.environ['GITHUB_REF_NAME']
+          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag), 'Invalid release tag'
+          version = configparser.ConfigParser(interpolation=None)
+          version.read_string('[app]\n' + Path('android/version.properties').read_text())
+          assert tag == 'v' + version.get('app', 'versionName'), 'Tag does not match Android version'
+          PY
+      - name: Get prepared release files
+        uses: actions/checkout@v4
+        with:
+          ref: release-assets/${{ github.ref_name }}
+          path: .release-assets
+      - name: Verify source and files
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          metadata = json.loads(Path('.release-assets/release.json').read_text())
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert metadata['tag'] == os.environ['GITHUB_REF_NAME'], 'Asset tag mismatch'
+          assert metadata['source_commit'] == source, 'Assets belong to a different source commit'
+          PY
+          cd .release-assets
+          sha256sum --check SHA256SUMS
+      - name: Publish prepared files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            ".release-assets/htu-connect-$GITHUB_REF_NAME-debug.apk#Android APK（调试签名）" \
+            ".release-assets/htu-toolbox-desktop-$GITHUB_REF_NAME.zip#Windows、Linux、macOS 桌面包" \
+            ".release-assets/SHA256SUMS#SHA-256 校验文件" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --prerelease \
+            --title "HTU Connect $GITHUB_REF_NAME · 跨平台测试版" \
+            --notes-file .release-assets/RELEASE_NOTES.md

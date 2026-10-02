@@ -5,12 +5,16 @@ use console::{style, Emoji};
 use eyre::Context;
 use htu_toolbox_lib::{config::NetLoginAccount, net::Operator};
 use net::{Net, NetAccArgs};
+use std::{io::IsTerminal, process::ExitCode};
 
 mod config;
 mod net;
 
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
+    /// 完成后等待回车（仅用于交互式终端）
+    #[arg(long)]
+    pause: bool,
     #[clap(subcommand)]
     cmd: Option<SubCmd>,
 }
@@ -144,15 +148,19 @@ fn run() -> eyre::Result<()> {
     };
 
     processed.execute().with_context(|| "指令执行失败")?;
-    println!("{} {}", Emoji::new("✅", "[√]"), style("按回车键继续..."));
-    wait_stdin();
+    if args.pause && std::io::stdin().is_terminal() {
+        println!("按回车键继续...");
+        wait_stdin();
+    }
     Ok(())
 }
 
-fn main() {
-    let handle = std::thread::spawn(|| run().unwrap());
-    if handle.join().is_err() {
-        println!("{} {}", Emoji::new("❌", "[x]"), style("按回车键继续..."));
-        wait_stdin();
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error:?}");
+            ExitCode::FAILURE
+        }
     }
 }

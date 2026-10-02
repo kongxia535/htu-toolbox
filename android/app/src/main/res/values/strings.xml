@@ -1,0 +1,3 @@
+<resources>
+    <string name="last_check">%1$s\n上次检测 %2$s</string>
+</resources>
