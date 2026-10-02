@@ -70,5 +70,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --prerelease \
-            --title "HTU Connect $GITHUB_REF_NAME · 跨平台测试版" \
+            --title "HTU Connect $RELEASE_TAG · 跨平台测试版" \
             --notes-file .release-assets/RELEASE_NOTES.md
