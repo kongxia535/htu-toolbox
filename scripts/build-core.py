@@ -6,6 +6,7 @@ import hashlib
 import platform
 import shutil
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,7 +32,15 @@ def main():
     destination = ROOT / "native"
     destination.mkdir(exist_ok=True)
     for filename in (name, cli):
-        shutil.copy2(artifacts / filename, destination / filename)
+        with tempfile.NamedTemporaryFile(dir=destination, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            shutil.copy2(artifacts / filename, temporary)
+            temporary.replace(destination / filename)
+        except PermissionError as error:
+            raise SystemExit("请先停止桌面服务，再重新构建原生文件。") from error
+        finally:
+            temporary.unlink(missing_ok=True)
     version = next(
         package["version"]
         for package in metadata["packages"]

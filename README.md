@@ -107,7 +107,7 @@ python3 scripts/setup.py --install-only
 bash scripts/start.sh
 ```
 
-构建脚本将唯一动态库和 CLI 放入 `native/`，同时记录源码提交与文件校验值。服务只加载这个目录，不自动编译或寻找其它实现。修改核心后先停止服务，再重新构建。
+构建脚本原子替换 `native/` 中的动态库和 CLI，同时记录源码提交与文件校验值。服务只加载这个目录，不自动编译或寻找其它实现。修改核心后先停止服务，重新构建后再启动服务。
 
 ```bash
 cargo test --workspace --locked --jobs 2
