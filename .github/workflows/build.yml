@@ -1,0 +1,44 @@
+name: Build desktop
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - run: python -m pip install -r requirements.txt
+      - name: Build and verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            python scripts/build-core.py
+            cargo test --workspace --locked --jobs 2
+            cargo clippy --workspace --all-targets --locked -- -D warnings
+            cargo fmt --all --check
+            python -m unittest discover -s tests -v
+            node --check web/static/app.js
+          } 2>&1 | tee "$RUNNER_TEMP/verify.log"
+      - name: Report failed verification
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/verify.log" ]; then
+            { printf '\n```text\n'; tail -n 100 "$RUNNER_TEMP/verify.log"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - run: python scripts/package-release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: htu-connect-${{ runner.os }}-${{ runner.arch }}
+          path: dist/htu-connect-*.zip*

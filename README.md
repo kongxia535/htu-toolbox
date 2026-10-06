@@ -1,131 +1,128 @@
-# HTU Connect · 校园网助手
+# HTU Connect
 
-河师大校园网自动登录工具。桌面端使用本地 Python 服务与响应式网页，Android 使用 Kotlin 原生应用。保留独立的 Rust 命令行工具。
+Windows、Linux、macOS 校园网管理工具。Rust 实现唯一的校园网业务，Python 提供本机网页与后台运行，CLI 调用同一本机服务。当前版本 **2.0.0**，已移除 Android。
 
-## 平台与运行方式
+完整的功能、接口与实现归属见 [功能接口与实现梳理](docs/功能接口与实现梳理.md)。
 
-| 平台 | 界面 | 自动登录与后台运行 | 密码保存 |
-| --- | --- | --- | --- |
-| Windows 10/11 | 本机网页 | Windows 计划任务、PowerShell watcher | 当前用户 DPAPI |
-| Linux | 本机网页 | Python watcher；可安装 systemd 用户服务 | Fernet 本机加密文件，权限 0600 |
-| macOS | 本机网页 | Python watcher；可安装 LaunchAgent | Fernet 本机加密文件，权限 0600 |
-| Android 8.0+ | Kotlin 原生界面 | 带通知的前台服务；可选择开机恢复 | Android Keystore AES-GCM |
+## 使用桌面包
 
-认证仅适用于设备连接河师大校园网络的情况。门户地址目前限定为 `http(s)://10.101.2.194:6060/portal.do`，需保留完整查询参数。公网探针返回预期内容才判断在线；认证通过与联网验证通过分别展示。
+选择与操作系统、CPU 架构及 Python 架构匹配的桌面 ZIP，完整解压。需要 Python **3.10+**；发布包已包含 Rust 核心与 CLI，运行时不需要 Cargo 或 curl 命令。
+
+Linux 原生文件使用 OpenSSL 3、zlib、zstd 系统库；CI 在 Ubuntu 22.04 构建。Windows 包使用 64 位 Python。macOS 包的架构以文件名为准。
 
 ### Windows
 
-需要 Windows PowerShell 5.1、Python **3.10+**（加入 PATH）。网页和自动登录不需要 Rust。
-
-1. 完整解压源码或发布包，运行根目录 `Setup.cmd`。
-2. 本机浏览器打开控制台后，填写账号、运营商和密码，点击自动获取或粘贴完整门户地址。
-3. 点击“保存并连接”。后续保存时密码留空会保留已有密文。
-
-控制台与自动登录是两个独立计划任务。自动恢复选项控制登录后的启动及看门狗触发。停止操作禁用任务并结束当前安装目录下的进程；重新启动会启用任务。
-
-```powershell
-# 单次检测。失败返回非零退出码；不会修改常驻任务。
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\CampusNetAutoLogin.ps1 -Once -ShowStatus
-# 卸载任务，保留账号与日志
-.\scripts\Uninstall-CampusNetAutoLogin.ps1
-.\scripts\Uninstall-WebDashboard.ps1
-```
-
-Windows 配置为 `runtime/campus-auto-login.json`。密码绑定当前 Windows 用户，换用户或设备后需要重新输入。
+运行 `Setup.cmd`。脚本建立 `.venv`、安装所需依赖并打开本机网页。默认是前台运行，关闭服务进程会停止后台检测；关闭浏览器不会停止服务。
 
 ### Linux / macOS
 
-需要 Python **3.10+**，不依赖 PowerShell。
-
 ```bash
+python3 scripts/setup.py --install-only
 bash scripts/start.sh
 ```
 
-脚本建立 `.venv`、安装 `requirements.txt` 并启动本机控制台。默认端口 8765；可传 `--port 8877`。直接开发启动：
+默认端口 8765，可以使用 `bash scripts/start.sh --port 8877`。启动脚本只启动服务，不重复安装依赖。
+
+### 账号和操作
+
+1. 连接校园网，填写账号、运营商及完整门户地址。门户限定为 `http(s)://10.101.2.194:6060/portal.do?...`。
+2. 可以点击“自动获取门户地址”，再点击“保存并连接”。首次必须输入密码，以后密码留空保留已有密码。
+3. “立即检测”只检测网络。“立即登录”提交认证；认证接受与公网联网分别判断。
+4. “停止自动登录”停止后续检测并保存停止状态，不会登出校园网。重新打开服务也不会自行恢复已停止的任务。
+
+程序仅使用一个公网探针。请求失败或响应异常时显示检测错误；只有识别出支持的校园门户，后台才尝试认证。元数据读取失败会终止本次认证。更换网络导致门户参数失效时，重新获取并保存门户地址。
+
+## 系统自启
+
+在网页启用“系统启动时恢复自动登录”，并启动自动登录。停止前台实例后，安装当前用户的系统服务：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m web.server --open-browser
+# Windows 使用 .venv\Scripts\python.exe；Linux/macOS 使用 .venv/bin/python
+python scripts/install-user-service.py
+# 自定义端口
+python scripts/install-user-service.py --port 8877
+# 停止并移除系统服务，保留账号与日志
+python scripts/install-user-service.py --remove
 ```
 
-网页服务存活时，内部 watcher 持续检测与退避重试。开启“自动恢复登录”后，服务再次启动时恢复 watcher。**系统登录后自启**需要另外安装用户服务：先停止前台实例，避免端口冲突，再运行：
+三个系统分别使用一个 Windows 计划任务 `HTU-Connect`、一个 systemd 用户服务、一个 LaunchAgent。它们只启动同一个桌面宿主，不执行另一套认证逻辑。
+
+`autoStart` 控制系统启动后的恢复，`enabled` 记录用户的启停选择。只有两者都开启，系统启动才恢复自动登录。手动打开服务则恢复 enabled 状态。
+
+## CLI
+
+CLI 必须使用正在运行的桌面服务。会话端口与令牌从当前用户数据目录读取，不维护第二套账号配置。
 
 ```bash
-.venv/bin/python scripts/install-user-service.py
-# 停止并卸载用户服务，保留账号配置
-.venv/bin/python scripts/install-user-service.py --remove
+# Windows 文件名为 native\htu-toolbox-cli.exe
+native/htu-toolbox-cli net status
+native/htu-toolbox-cli net check
+native/htu-toolbox-cli net login
+native/htu-toolbox-cli net start
+native/htu-toolbox-cli net stop
+native/htu-toolbox-cli net detect-portal
+native/htu-toolbox-cli net logs --tail 250
+# 登出前停止自动登录，避免立即重新认证
+native/htu-toolbox-cli net logout
 ```
 
-Linux 要求可用的 systemd 用户会话；macOS 使用当前用户 LaunchAgent。网页仅监听回环地址，不提供局域网远程控制。可用 `HTU_RUNTIME_DIR` 指定本机数据目录。
+`net set` 从 stdin 读取配置 JSON，只保存不启动，不通过命令行参数传密码。字段包括 account、operator、password、portalUrl、intervalSeconds、autoStart。服务未运行、请求失败或检测结果含错误时，CLI 返回非零退出码。
 
-Linux/macOS 使用 `runtime/desktop-config.json` 和 `runtime/credential.key`。密钥与密文保存在同一设备，依靠用户文件权限保护，**不等同于硬件密钥库**；不要分享或提交整个 `runtime/`。加密文件不是 Windows DPAPI 配置，跨平台需要重新设置账号。
+## 数据与密码
 
-### Android 原生 APK
+唯一配置文件是用户数据目录中的 `config.json`：
 
-Android 源码在 `android/`，使用原生控件，不依赖 WebView、Python 或 Termux。
+| 系统 | 默认目录 | 密码存储 |
+| --- | --- | --- |
+| Windows | `%LOCALAPPDATA%\HTUConnect` | 当前用户 DPAPI |
+| Linux | `$XDG_DATA_HOME/HTUConnect`，未设置时 `~/.local/share/HTUConnect` | Fernet；密钥与文件权限 0600 |
+| macOS | `~/Library/Application Support/HTUConnect` | Fernet；密钥与文件权限 0600 |
 
-1. 安装调试 APK，打开 **HTU Connect**，填写账号和门户地址。
-2. 保存并连接，允许通知。自动登录以可见前台服务运行，可在应用或通知中停止。
-3. 可开启“开机后恢复自动登录”。停止服务后不会因开机选项重新启动，需手动再次开启。
+可设置绝对路径 `HTU_RUNTIME_DIR`；应使用当前用户私有目录。安装系统服务时会保存该目录。服务及 CLI 也可使用 `--runtime-dir` 指定同一目录。
 
-联网请求优先使用 Wi-Fi 网络，避免未认证 Wi-Fi 时请求误走移动数据。部分厂商系统仍需手动允许后台运行；强制停止应用后需重新打开。应用禁止系统备份密码数据，Keystore 密钥不能随 APK 或配置迁移。HTTP 明文仅允许校园门户和指定探针域名。
+目录还包含 `credential.key`（Unix）、运行日志、`service.lock` 和仅在服务运行期间存在的 `session.json`。网页不返回密码。日志最多轮转两个 5 MiB 备份，网页最多读取 1000 行；导出的是当前显示内容。
 
-构建需要 JDK 17+、Android SDK 36 / Build Tools 36.0.0：
+## 从 1.x 迁移
+
+2.0 更换了接口与配置，需在网页重新输入账号与密码，不自动导入旧密文或 Rust TOML。原 `restart`、`force-login` 和单独的日志下载接口已移除；使用 start/stop、login 及统一日志读取接口。
+
+Windows 更新前停止并移除旧版的两个任务，避免旧进程继续运行：
+
+```powershell
+Stop-ScheduledTask -TaskName 'HTU-CampusNet-AutoLogin'
+Unregister-ScheduledTask -TaskName 'HTU-CampusNet-AutoLogin' -Confirm:$false
+Stop-ScheduledTask -TaskName 'HTU-CampusNet-Dashboard'
+Unregister-ScheduledTask -TaskName 'HTU-CampusNet-Dashboard' -Confirm:$false
+```
+
+Linux/macOS 先停止旧用户服务，再安装 2.0 服务。旧 `runtime/`、其配置备份及 Rust `config.toml` 不再使用；确认新配置可用后自行删除旧数据。
+
+## 开发与构建
+
+源码构建需要 Rust 1.90.0、Python 3.10+、C 编译工具和 OpenSSL 开发依赖（Linux）。Rust 工具链及组件在 `rust-toolchain.toml` 固定，依赖由 Cargo.lock 锁定。
 
 ```bash
-cd android
-./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+python3 scripts/build-core.py
+python3 scripts/setup.py --install-only
+bash scripts/start.sh
 ```
 
-APK 在 `android/app/build/outputs/apk/debug/app-debug.apk`。调试签名用于安装验证；正式发布需由项目维护者配置自己的签名密钥，项目不保存密钥。
-
-版本信息统一配置在 `android/version.properties`，Gradle 和独立 SDK 构建使用同一版本号。
-
-Maven 不可用时，也可使用已安装的 Android SDK 与官方 Kotlin 2.1.20 编译器直接构建：
+构建脚本将唯一动态库和 CLI 放入 `native/`，同时记录源码提交与文件校验值。服务只加载这个目录，不自动编译或寻找其它实现。修改核心后先停止服务，再重新构建。
 
 ```bash
-python3 scripts/build-android.py --sdk /path/to/android-sdk --kotlin /path/to/kotlinc
+cargo test --workspace --locked --jobs 2
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
+python -m unittest discover -s tests -v
+node --check web/static/app.js
 ```
 
-此方式生成并校验调试 APK：`dist/htu-connect-debug.apk`，需要 SDK Platform 36、Build Tools 36.0.0 和 JDK 17+。编译器安装包应校验官方 SHA-256；脚本不自动下载或关闭任何校验。可额外传 `--junit` 和 `--hamcrest` 指定 JUnit 4.13.2 与 Hamcrest jar，执行现有 Android 单元测试。
-
-
-## Rust 命令行工具
-
-Rust CLI 与网页/Android 配置独立。使用固定 Rust 1.90.0 及 libcurl 开发依赖，云环境使用 Rust 1.90 验证。
+发布包由同一个脚本生成，要求源码干净、原生文件由当前提交构建：
 
 ```bash
-cargo build --workspace
-cargo run -p htu-toolbox-cli -- --help
-cargo run -p htu-toolbox-cli -- net set
-cargo run -p htu-toolbox-cli -- net login
-cargo run -p htu-toolbox-cli -- net logout
+python scripts/package-release.py
 ```
 
-命令完成后直接退出，失败返回非零退出码；交互终端需要停留时使用 `--pause`。支持 `yd`、`lt`、`dx`、`hsd`。配置在系统配置目录下的 `htu-toolbox/config.toml`，目前 Rust CLI 仍以 TOML 保存密码，请保护此文件。
+CI 在三个桌面系统调用相同的构建与验证工作流；标签发布复用该工作流，上传同一次构建的 ZIP 与 SHA-256 文件，不使用资产分支或备用发布触发方式。
 
-## 开发与验证
-
-```bash
-python3 -m pip install -r requirements.txt
-python3 -m unittest discover -s tests -v
-cargo test --workspace
-```
-
-Windows 另运行 `tests/Test-Watcher.ps1`，通过模拟认证检查单次执行结果。Android 执行上述 Gradle 测试与 lint。CI 配置在 `.github/workflows/verify.yml`，覆盖三个桌面系统及 Android 构建。
-
-```text
-web/config.py       参数校验、原子配置保存、桌面密码加密
-web/network.py      探针、门户发现、认证请求
-web/runtime.py      后台 watcher、操作互斥、平台适配
-web/windows.py      Windows 计划任务适配
-web/server.py       本机 HTTP/API 服务
-web/static/         响应式网页、深浅主题
-android/            原生应用、Keystore、前台服务
-htu-toolbox-lib/    Rust HTTP 与认证库
-htu-toolbox-cli/    Rust 命令行入口
-scripts/            平台安装、启动、停止与打包
-```
-
-配置、日志、PID 位于 Git 忽略的 `runtime/`；日志轮转，网页最多导出最近 1000 行。Windows 发布包可用 `scripts/Package-Release.ps1` 生成，不包括运行数据。
+组件测试和模拟协议测试不等于真实校园网认证验证。系统登录自启也需要在相应设备上验证。

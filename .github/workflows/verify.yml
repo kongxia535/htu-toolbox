@@ -1,69 +1,10 @@
 name: Verify
 on:
   push:
-    branches: ["master"]
+    branches: [master, "refactor/**"]
   pull_request:
 permissions:
   contents: read
 jobs:
-  desktop:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - run: python -m pip install -r requirements.txt
-      - run: python -m unittest discover -s tests -v
-      - if: runner.os == 'Windows'
-        shell: powershell
-        run: ./tests/Test-Watcher.ps1
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev pkg-config
-      - run: cargo build --workspace --locked && cargo test --workspace --locked
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-      - name: Prepare Android SDK
-        id: sdk
-        shell: bash
-        run: |
-          set -o pipefail
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0" 2>&1 | tee android-sdk.log
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Build and check Android
-        id: build
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug 2>&1 | tee android-build.log
-        working-directory: android
-      - name: Android failure summary
-        if: failure()
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import os
-          from pathlib import Path
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as report:
-              for filename in ['android-sdk.log', 'android/android-build.log']:
-                  path = Path(filename)
-                  if path.exists():
-                      lines = path.read_text(errors='replace').splitlines()[-100:]
-                      report.write('### ' + path.name + '\n\n```text\n' + '\n'.join(lines) + '\n```\n')
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: htu-connect-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+  build:
+    uses: ./.github/workflows/build.yml

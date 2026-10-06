@@ -2,6 +2,7 @@
 # will have compiled files and executables
 debug/
 target/
+native/
 
 # Local auto-login runtime data
 runtime/
@@ -16,14 +17,8 @@ dist/
 __pycache__/
 *.pyc
 
-# Desktop virtual environment and Android outputs
+# Desktop virtual environment
 .venv/
-android/.gradle/
-android/.kotlin/
-android/**/build/
-android/local.properties
-*.jks
-*.keystore
 
 # Remove Cargo.lock from gitignore if creating an executable, leave it for libraries
 # More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html

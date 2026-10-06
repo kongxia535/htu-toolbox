@@ -19,13 +19,6 @@
       >
       <div class="topbar-actions">
         <span id="platformBadge" class="platform-badge">本地服务</span
-        ><button
-          id="themeButton"
-          class="icon-button"
-          type="button"
-          aria-label="切换深浅主题"
-        >
-          ◐</button
         ><button id="refreshButton" class="button" type="button">
           刷新状态
         </button>
@@ -48,17 +41,12 @@
         <article class="metric">
           <span class="metric-label">网络状态</span
           ><strong id="networkState">—</strong
-          ><small id="networkHint">正在检测网络</small>
+          ><small id="networkHint">尚未检测网络</small>
         </article>
         <article class="metric">
           <span class="metric-label">自动登录</span
           ><strong id="taskState">—</strong
           ><small id="taskHint">等待读取</small>
-        </article>
-        <article class="metric">
-          <span class="metric-label">后台运行</span
-          ><strong id="processState">—</strong
-          ><small id="processHint">等待读取</small>
         </article>
         <article class="metric">
           <span class="metric-label">下次检测</span
@@ -142,43 +130,13 @@
                   value="10"
                   required /></label
               ><label class="toggle-field"
-                ><span>自动恢复登录</span
+                ><span>系统启动时恢复</span
                 ><input id="autoStartInput" type="checkbox" checked /><span
                   class="toggle-track"
                   aria-hidden="true"
                 ></span
               ></label>
             </div>
-            <details id="windowsOptions" hidden>
-              <summary>Windows 后台任务设置</summary>
-              <div class="form-row policy-grid">
-                <label
-                  ><span>后台检查间隔（分钟）</span
-                  ><input
-                    id="watchdogIntervalInput"
-                    type="number"
-                    min="1"
-                    max="1440"
-                    value="5" /></label
-                ><label
-                  ><span>失败重启次数</span
-                  ><input
-                    id="restartCountInput"
-                    type="number"
-                    min="0"
-                    max="999"
-                    value="999" /></label
-                ><label
-                  ><span>重启等待（分钟）</span
-                  ><input
-                    id="restartIntervalInput"
-                    type="number"
-                    min="1"
-                    max="1440"
-                    value="1"
-                /></label>
-              </div>
-            </details>
             <button id="saveButton" class="save-button" type="submit">
               保存并连接
             </button>
@@ -204,11 +162,7 @@
               >
                 <span class="action-symbol">↻</span
                 ><span>立即检测</span></button
-              ><button
-                class="action-button"
-                data-action="force-login"
-                type="button"
-              >
+              ><button class="action-button" data-action="login" type="button">
                 <span class="action-symbol">↗</span
                 ><span>立即登录</span></button
               ><button class="action-button" data-action="start" type="button">
@@ -223,10 +177,8 @@
               </button>
             </div>
             <div class="result-box">
-              <span class="metric-label">最近一次检测</span>
-              <p id="lastResult" aria-live="polite">
-                暂无检测结果
-              </p>
+              <span class="metric-label">最近一次操作</span>
+              <p id="lastResult" aria-live="polite">暂无检测结果</p>
             </div>
             <p id="platformHint" class="field-help">
               关闭浏览器后，后台服务仍会运行。
@@ -234,7 +186,7 @@
           </section>
           <section class="note-card">
             <h3>使用说明</h3>
-            <p>连接校园网后使用。<br />立即检测会在未联网时尝试登录。</p>
+            <p>连接校园网后使用。<br />立即检测仅检查网络，不执行登录。</p>
             <div class="note-art" aria-hidden="true">
               <span></span><span></span><span></span>
             </div>
@@ -273,9 +225,7 @@
           <pre id="logOutput" class="log-output">暂无记录</pre>
         </section>
       </section>
-      <footer>
-        <span>HTU Connect</span><span>校园网自动登录工具</span>
-      </footer>
+      <footer><span>HTU Connect</span><span>校园网自动登录工具</span></footer>
     </main>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/app.js"></script>

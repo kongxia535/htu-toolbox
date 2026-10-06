@@ -13,19 +13,6 @@
   --radius: 22px;
   font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #111c1a;
-  --surface: #192623;
-  --soft: #20302b;
-  --text: #e5eee8;
-  --muted: #9cafa5;
-  --border: #30453b;
-  --accent: #63c8af;
-  --accent-soft: #233e33;
-  --danger: #f79292;
-  --warning: #dec58b;
-}
 * {
   box-sizing: border-box;
 }
@@ -127,8 +114,7 @@ summary:focus-visible {
   padding: 7px 11px;
   border-radius: 8px;
 }
-.button,
-.icon-button {
+.button {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -136,11 +122,6 @@ summary:focus-visible {
   min-height: 40px;
   padding: 0 14px;
   font-size: 12px;
-}
-.icon-button {
-  font-size: 22px;
-  width: 40px;
-  padding: 0;
 }
 .button:hover {
   border-color: var(--accent);
@@ -222,7 +203,7 @@ h1 span {
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 28px;
 }
@@ -428,10 +409,6 @@ details {
 summary {
   cursor: pointer;
   padding: 8px 0;
-}
-.policy-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 10px;
 }
 .save-button {
   display: flex;
@@ -773,9 +750,6 @@ footer {
   }
   .two-columns {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .policy-grid {
-    grid-template-columns: 1fr;
   }
   .metric strong {
     font-size: 19px;

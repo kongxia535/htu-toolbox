@@ -1,13 +1,5 @@
 from __future__ import annotations
 
-# Also support the legacy Windows entry point: python web/server.py.
-if __package__ in {None, ""}:
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    __package__ = "web"
-
 import argparse
 import json
 import logging
@@ -17,22 +9,16 @@ from pathlib import Path
 import secrets
 import signal
 import socket
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from dataclasses import dataclass
 
 from .config import atomic_write
-from .errors import BusyError, DashboardError
-from .network import detect_portal_url, network_status
-from .runtime import Controller
+from .core import DashboardError
+from .runtime import BusyError, Controller
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT_DIR / "web" / "static"
-RUNTIME_DIR = Path(
-    os.environ.get("HTU_RUNTIME_DIR", str(ROOT_DIR / "runtime"))
-).resolve()
-LOG_PATH = RUNTIME_DIR / "campus-auto-login.log"
 TOKEN_PLACEHOLDER = "{{HTU_TOKEN}}"
 
 
@@ -42,12 +28,12 @@ class ServerConfig:
     port: int
 
 
-def read_log_tail(lines: int = 200) -> list[str]:
-    if not LOG_PATH.exists():
+def read_log_tail(path: Path, lines: int = 200) -> list[str]:
+    if not path.exists():
         return []
     lines = max(1, min(lines, 1000))
     try:
-        with LOG_PATH.open("rb") as handle:
+        with path.open("rb") as handle:
             handle.seek(0, 2)
             position = handle.tell()
             data = b""
@@ -168,35 +154,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "data": {
                             "task": controller.status(),
-                            "network": network_status(),
+                            "network": dict(controller.last_result),
                             "config": controller.store.summary(),
                             "platform": controller.platform_info(),
                         },
                     },
                 )
             elif parsed.path == "/api/detect-portal":
-                self.send_json(200, {"ok": True, "data": detect_portal_url()})
+                self.send_json(
+                    200, {"ok": True, **self.server.controller.mutate("detect", {})}
+                )
             elif parsed.path == "/api/logs":
                 tail = int(parse_qs(parsed.query).get("tail", ["250"])[0])
                 if not 1 <= tail <= 1000:
                     raise DashboardError("日志行数须为 1 到 1000。")
-                lines = read_log_tail(tail)
+                lines = read_log_tail(self.server.log_path, tail)
                 try:
-                    modified = LOG_PATH.stat().st_mtime
+                    modified = self.server.log_path.stat().st_mtime
                 except FileNotFoundError:
                     modified = None
                 self.send_json(
                     200,
                     {"ok": True, "data": {"lines": lines, "lastWriteTime": modified}},
                 )
-            elif parsed.path == "/api/download-log":
-                self.send_bytes(
-                    200,
-                    "\n".join(read_log_tail(1000)).encode(),
-                    "text/plain; charset=utf-8",
-                )
             else:
                 self.send_json(404, {"ok": False, "error": "接口不存在。"})
+        except BusyError as error:
+            self.send_json(409, {"ok": False, "error": str(error)})
         except (DashboardError, ValueError, OSError) as error:
             self.send_json(400, {"ok": False, "error": str(error)})
 
@@ -220,10 +204,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/action" and not isinstance(payload.get("action"), str):
                 raise DashboardError("action 必须是字符串。")
-            message = self.server.controller.mutate(
+            result = self.server.controller.mutate(
                 "config" if path == "/api/config" else "action", payload
             )
-            self.send_json(200, {"ok": True, "message": message})
+            self.send_json(200, {"ok": True, **result})
         except BusyError as error:
             self.send_json(409, {"ok": False, "error": str(error)})
         except (DashboardError, ValueError, OSError) as error:
@@ -243,8 +227,46 @@ class DashboardServer(ThreadingHTTPServer):
         self, config: ServerConfig, token: str, controller: Controller | None = None
     ):
         self.token = token
-        self.controller = controller or Controller(RUNTIME_DIR)
-        super().__init__((config.host, config.port), DashboardHandler)
+        self.controller = controller or Controller()
+        directory = self.controller.store.directory
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.log_path = directory / "campus-auto-login.log"
+        self.session_path = directory / "session.json"
+        self.session_written = False
+        self.instance = (directory / "service.lock").open("a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                if self.instance.tell() == 0:
+                    self.instance.write(b"0")
+                    self.instance.flush()
+                self.instance.seek(0)
+                msvcrt.locking(self.instance.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.instance.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            self.instance.close()
+            raise DashboardError("此用户数据目录已有桌面服务运行。") from error
+        try:
+            super().__init__((config.host, config.port), DashboardHandler)
+            atomic_write(
+                self.session_path,
+                json.dumps({"port": self.server_port, "token": token}).encode(),
+            )
+            self.session_written = True
+        except Exception:
+            self.server_close()
+            raise
+
+    def server_close(self):
+        super().server_close()
+        if self.session_written:
+            self.session_path.unlink(missing_ok=True)
+            self.session_written = False
+        self.instance.close()
 
 
 def main() -> int:
@@ -254,19 +276,33 @@ def main() -> int:
     )
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open-browser", action="store_true")
+    parser.add_argument(
+        "--autostart",
+        action="store_true",
+        help="系统启动：仅在 autoStart 和 enabled 都开启时恢复",
+    )
+    parser.add_argument("--runtime-dir", type=Path)
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if args.runtime_dir:
+        if not args.runtime_dir.is_absolute():
+            parser.error("runtime-dir must be absolute")
+        os.environ["HTU_RUNTIME_DIR"] = str(args.runtime_dir)
+    controller = Controller()
+    directory = controller.store.directory
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     handler = RotatingFileHandler(
-        LOG_PATH, maxBytes=5 * 1024 * 1024, backupCount=2, encoding="utf-8"
+        directory / "campus-auto-login.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=2,
+        encoding="utf-8",
     )
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[handler],
     )
-    controller = Controller(RUNTIME_DIR)
     try:
         server = DashboardServer(
             ServerConfig(args.host, args.port), secrets.token_urlsafe(32), controller
@@ -280,10 +316,8 @@ def main() -> int:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, stop)
-    pid = RUNTIME_DIR / "dashboard.pid"
-    atomic_write(pid, str(os.getpid()).encode())
     try:
-        controller.resume()
+        controller.resume(args.autostart)
         if args.open_browser:
             import webbrowser
 
@@ -294,8 +328,6 @@ def main() -> int:
     finally:
         controller.close()
         server.server_close()
-        if pid.exists() and pid.read_text() == str(os.getpid()):
-            pid.unlink()
     return 0
 
 

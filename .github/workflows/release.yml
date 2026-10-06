@@ -1,74 +1,52 @@
 name: Publish Release
-
 on:
   push:
     tags: ["v*"]
-    branches: ["publish/**"]
-
 permissions:
-  contents: write
-
+  contents: read
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
+  build:
+    uses: ./.github/workflows/build.yml
   release:
+    needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Select release tag
-        id: version
-        run: |
-          python3 - <<'PY'
-          import os, re
-          tag = os.environ['GITHUB_REF_NAME']
-          if os.environ['GITHUB_REF_TYPE'] == 'branch':
-              tag = tag.removeprefix('publish/')
-          assert re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag), 'Invalid release tag'
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('tag=' + tag + '\n')
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              output.write('RELEASE_TAG=' + tag + '\n')
-          PY
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ steps.version.outputs.tag }}
-      - name: Check release version
+          pattern: htu-connect-*
+          merge-multiple: true
+          path: release
+      - name: Verify version, source and checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python3 - <<'PY'
-          import configparser, os
+          import hashlib, json, os, tomllib, zipfile
           from pathlib import Path
-          version = configparser.ConfigParser(interpolation=None)
-          version.read_string('[app]\n' + Path('android/version.properties').read_text())
-          assert os.environ['RELEASE_TAG'] == 'v' + version.get('app', 'versionName'), 'Tag does not match Android version'
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          assert os.environ['RELEASE_TAG'] == 'v' + version
+          packages = list(Path('release').glob('*.zip'))
+          assert len(packages) == 3, 'Missing platform package'
+          for package in packages:
+              digest, filename = Path(str(package) + '.sha256').read_text().strip().split('  ')
+              assert filename == package.name
+              assert hashlib.sha256(package.read_bytes()).hexdigest() == digest
+              with zipfile.ZipFile(package) as archive:
+                  metadata = json.loads(archive.read('RELEASE.json'))
+                  assert metadata['version'] == version
+                  assert metadata['source_commit'] == os.environ['GITHUB_SHA']
           PY
-      - name: Get prepared release files
-        uses: actions/checkout@v5
-        with:
-          ref: release-assets/${{ steps.version.outputs.tag }}
-          path: .release-assets
-      - name: Verify source and files
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess
-          from pathlib import Path
-          metadata = json.loads(Path('.release-assets/release.json').read_text())
-          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-          assert metadata['tag'] == os.environ['RELEASE_TAG'], 'Asset tag mismatch'
-          assert metadata['source_commit'] == source, 'Assets belong to a different source commit'
-          PY
-          cd .release-assets
-          sha256sum --check SHA256SUMS
-      - name: Publish prepared files
+      - name: Publish verified desktop files
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            ".release-assets/htu-connect-$RELEASE_TAG-debug.apk#Android APK（调试签名）" \
-            ".release-assets/htu-toolbox-desktop-$RELEASE_TAG.zip#Windows、Linux、macOS 桌面包" \
-            ".release-assets/SHA256SUMS#SHA-256 校验文件" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --prerelease \
-            --title "HTU Connect $RELEASE_TAG · 跨平台测试版" \
-            --notes-file .release-assets/RELEASE_NOTES.md
+          gh release create "$RELEASE_TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "HTU Connect $RELEASE_TAG" --notes-file docs/release-notes.md

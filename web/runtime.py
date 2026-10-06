@@ -1,260 +1,179 @@
 from __future__ import annotations
-
 import logging
 import os
 import platform
 import threading
 import time
 from pathlib import Path
-
-from . import network, windows
-from .config import ConfigStore, validate_update
-from .errors import BusyError, DashboardError
+from .core import Core, DashboardError
+from .config import ConfigStore
 
 
-class Watcher:
-    """One cooperative watcher owned by the desktop service, never arbitrary PIDs."""
+class BusyError(DashboardError):
+    pass
 
-    def __init__(self, store: ConfigStore):
-        self.store = store
+
+class Controller:
+    """One desktop host, one execution lock, one worker on every supported OS."""
+
+    def __init__(self, directory: Path | None = None):
+        self.core = Core()
+        self.store = ConfigStore(
+            directory or Path(self.core.call("runtime-dir")["path"]), self.core
+        )
+        self.operations = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self.authentication = threading.Lock()
-        self.guard = threading.Lock()
         self.last_result: dict = {}
         self.next_run: float | None = None
+        self.failures = 0
 
     def running(self) -> bool:
-        return (
-            self.thread is not None
-            and self.thread.is_alive()
-            and not self.stop_event.is_set()
+        return bool(
+            self.thread and self.thread.is_alive() and not self.stop_event.is_set()
         )
 
-    def start(self) -> None:
-        if not self.store.load().get("password"):
-            raise DashboardError("请先保存账号配置。")
-        if self.running():
-            return
-        if self.thread is not None and self.thread.is_alive():
-            raise BusyError("登录请求正在结束，请稍后启动。")
-        self.stop_event.clear()
-        self.thread = threading.Thread(
-            target=self.loop, name="htu-watcher", daemon=True
-        )
-        self.thread.start()
+    def platform_info(self) -> dict:
+        return {
+            "name": {"Darwin": "macOS"}.get(platform.system(), platform.system()),
+            "passwordStorage": "Windows DPAPI" if os.name == "nt" else "本机加密文件",
+            "autostartHint": "系统自启需安装用户服务；关闭浏览器不会停止服务。",
+        }
 
-    def stop(self) -> None:
-        self.stop_event.set()
-        self.next_run = None
-
-    def check(self, force: bool = False) -> dict:
-        if not self.authentication.acquire(blocking=False):
-            raise BusyError("已有登录检测正在进行，请稍后重试。")
-        try:
-            config = self.store.load()
-            if not config.get("password"):
-                raise DashboardError("请先保存账号配置。")
-            if not force and network.network_status()["online"]:
-                result = {
-                    "online": True,
-                    "authenticated": False,
-                    "message": "网络在线，无需登录。",
-                }
-            else:
-                result = network.login(config, self.store.password(config))
-            with self.guard:
-                self.last_result = {**result, "time": time.time(), "ok": True}
-            logging.info("%s", result["message"])
-            return result
-        except DashboardError as error:
-            with self.guard:
-                self.last_result = {
-                    "ok": False,
-                    "message": str(error),
-                    "time": time.time(),
-                }
-            logging.warning("%s", error)
-            raise
-        finally:
-            self.authentication.release()
-
-    def loop(self) -> None:
-        failures = 0
-        while not self.stop_event.is_set():
-            self.next_run = None
+    def resume(self, autostart: bool = False) -> None:
+        config = self.store.load()
+        if config.get("enabled") and (not autostart or config.get("autoStart")):
             try:
-                self.check()
-                failures = 0
-            except BusyError:
-                pass
-            except DashboardError:
-                failures += 1
-            except Exception:
-                # Do not log raw exceptions from requests or crypto implementations.
-                logging.error("后台检测异常，请重新保存配置或重启服务。")
-                failures += 1
-            if self.stop_event.is_set():
-                break
-            interval = self.store.load().get("intervalSeconds", 10)
-            delay = min(
-                max(interval, interval * 2 ** min(max(failures - 1, 0), 3)),
-                max(interval, 60),
-            )
-            self.next_run = time.time() + delay
-            self.stop_event.wait(delay)
-        self.next_run = None
+                self.mutate("action", {"action": "start"})
+            except DashboardError as error:
+                # Keep management available so the user can repair credentials.
+                self.last_result = {
+                    "state": "error",
+                    "online": False,
+                    "authenticated": False,
+                    "checkedAt": None,
+                    "errorStage": error.stage,
+                    "error": str(error),
+                    "message": str(error),
+                }
+                logging.error("自动登录未启动：%s", error)
+
+    def close(self) -> None:
+        # Process exit does not change user intent; explicit stop does.
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=26)
 
     def status(self) -> dict:
-        with self.guard:
-            result = dict(self.last_result)
-        configured = bool(self.store.load().get("password"))
+        config = self.store.summary()
         running = self.running()
         return {
             "ok": True,
             "state": (
-                "Running" if running else "Ready" if configured else "NotInstalled"
+                "Running"
+                if running
+                else "Ready" if config["passwordConfigured"] else "NotInstalled"
             ),
-            "watcherCount": int(running),
-            "processIds": [os.getpid()] if running else [],
             "nextRunTime": self.next_run,
-            "lastRunTime": result.get("time"),
-            "lastResult": result,
-            "stopping": bool(self.thread and self.thread.is_alive() and not running),
-        }
-
-
-class Controller:
-    def __init__(self, directory: Path, system: str | None = None):
-        self.system = system or platform.system()
-        self.is_windows = self.system == "Windows"
-        self.store = ConfigStore(directory, windows=self.is_windows)
-        self.watcher = Watcher(self.store)
-        self.operations = threading.Lock()
-
-    def platform_info(self) -> dict:
-        name = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}.get(
-            self.system, self.system
-        )
-        return {
-            "name": name,
-            "backend": "scheduled-task" if self.is_windows else "local-service",
-            "passwordStorage": "Windows DPAPI" if self.is_windows else "本机加密文件",
-            "autostartHint": (
-                "登录 Windows 后自动运行"
-                if self.is_windows
-                else "服务启动时恢复；系统自启需安装用户服务"
+            "lastRunTime": self.last_result.get("checkedAt"),
+            "lastResult": dict(self.last_result),
+            "stopping": bool(
+                self.thread and self.thread.is_alive() and self.stop_event.is_set()
             ),
         }
 
-    def resume(self) -> None:
-        if not self.is_windows:
-            config = self.store.load()
-            if config.get("password") and config.get("autoStart", True):
-                self.watcher.start()
+    def run(self, op: str) -> dict:
+        try:
+            payload = {}
+            if op in {"login", "tick"}:
+                payload["config"] = self.store.credentials()
+            if op == "tick":
+                payload["failures"] = self.failures
+            result = self.core.call(op, **payload)
+        except DashboardError as error:
+            self.last_result = {
+                "state": "error",
+                "online": False,
+                "authenticated": False,
+                "checkedAt": (
+                    None if error.stage in {"config", "credentials"} else time.time()
+                ),
+                "errorStage": error.stage,
+                "error": str(error),
+                "message": str(error),
+            }
+            logging.warning("%s: %s", error.stage, error)
+            raise
+        self.last_result = result
+        logging.info("%s", result["message"])
+        return result
 
-    def close(self) -> None:
-        if not self.is_windows:
-            self.watcher.stop()
+    def loop(self) -> None:
+        try:
+            while not self.stop_event.is_set():
+                if not self.operations.acquire(timeout=0.2):
+                    continue
+                try:
+                    if self.stop_event.is_set():
+                        break
+                    self.next_run = None
+                    result = self.run("tick")
+                    self.failures = result["failures"]
+                    delay = result["nextDelay"]
+                    self.next_run = time.time() + delay
+                finally:
+                    self.operations.release()
+                if self.stop_event.wait(delay):
+                    break
+        except DashboardError as error:
+            logging.error("后台服务已停止：%s", error)
+        finally:
+            self.next_run = None
 
-    def status(self) -> dict:
-        if self.is_windows:
-            try:
-                return windows.task_status()
-            except DashboardError as error:
-                return {
-                    "ok": False,
-                    "state": "Unknown",
-                    "error": str(error),
-                    "watcherCount": 0,
-                }
-        return self.watcher.status()
-
-    def update(self, payload: dict) -> str:
-        config = validate_update(payload, self.store.load())
-        if self.is_windows:
-            args = []
-            for key, flag in (
-                ("account", "Account"),
-                ("operator", "Operator"),
-                ("portalUrl", "PortalUrl"),
-                ("intervalSeconds", "IntervalSeconds"),
-                ("watchdogIntervalMinutes", "WatchdogIntervalMinutes"),
-                ("restartCount", "RestartCount"),
-                ("restartIntervalMinutes", "RestartIntervalMinutes"),
-            ):
-                args.extend(["-" + flag, str(config[key])])
-            args += [
-                "-ConfigPath",
-                str(self.store.path),
-                "-LogPath",
-                str(self.store.directory / "campus-auto-login.log"),
-            ]
-            environment = os.environ.copy()
-            environment.pop("HTU_AUTO_LOGIN_PASSWORD", None)
-            if config["password"]:
-                environment["HTU_AUTO_LOGIN_PASSWORD"] = config["password"]
-            else:
-                args.append("-PreservePassword")
-            if not config["autoStart"]:
-                args.append("-DisableAutoStart")
-            return windows.run_powershell_script(
-                windows.INSTALL_SCRIPT, args, env=environment
-            )
-        if (
-            self.watcher.thread
-            and self.watcher.thread.is_alive()
-            and not self.watcher.running()
-        ):
-            raise BusyError("后台请求正在结束，请稍后保存。")
-        self.store.save(config)
-        self.watcher.start()
-        return "配置已保存，自动登录已启动。"
-
-    def action(self, action: str) -> str:
-        if action not in {"start", "stop", "restart", "check", "force-login"}:
-            raise DashboardError("未知操作。")
-        if self.is_windows:
-            if action in {"check", "force-login"}:
-                args = ["-Once", "-ShowStatus", "-ConfigPath", str(self.store.path)]
-                if action == "force-login":
-                    args.append("-ForceLogin")
-                return windows.run_powershell_script(
-                    windows.WATCHER_SCRIPT, args, timeout=75
+    def action(self, action: str) -> dict:
+        if action in {"check", "login", "logout"}:
+            if action == "logout":
+                self.store.set_enabled(False)
+                self.stop_event.set()
+                self.next_run = None
+            result = self.run(action)
+            return {"message": result["message"], "data": result}
+        if action == "start":
+            self.store.credentials()
+            if self.thread and self.thread.is_alive() and not self.running():
+                raise BusyError("后台请求正在结束，请稍后启动。")
+            self.store.set_enabled(True)
+            if not self.running():
+                self.stop_event.clear()
+                self.failures = 0
+                self.thread = threading.Thread(
+                    target=self.loop, name="htu-worker", daemon=True
                 )
-            if action in {"stop", "restart"}:
-                windows.run_powershell_script(
-                    windows.STOP_SCRIPT, ["-TaskName", windows.TASK_NAME]
-                )
-            if action in {"start", "restart"}:
-                windows.run_powershell(
-                    "$ErrorActionPreference='Stop'; "
-                    f"Enable-ScheduledTask -TaskName '{windows.TASK_NAME}' | Out-Null; "
-                    f"Start-ScheduledTask -TaskName '{windows.TASK_NAME}'"
-                )
-            return "后台任务操作已完成。"
-        if action in {"check", "force-login"}:
-            return self.watcher.check(force=action == "force-login")["message"]
-        if action in {"stop", "restart"}:
-            self.watcher.stop()
-            if action == "restart" and self.watcher.thread:
-                self.watcher.thread.join(timeout=40)
-        if action in {"start", "restart"}:
-            self.watcher.start()
-        return (
-            "自动登录已启动。"
-            if action != "stop"
-            else "自动登录已停止；进行中的请求结束后退出。"
+                self.thread.start()
+            return {"message": "自动登录已启动。"}
+        if action == "stop":
+            self.store.set_enabled(False)
+            self.stop_event.set()
+            self.next_run = None
+            return {"message": "自动登录已停止。"}
+        raise DashboardError("未知操作。")
+
+    def mutate(self, kind: str, payload: dict) -> dict:
+        stopping = kind == "action" and payload.get("action") in {"stop", "logout"}
+        if stopping:
+            self.stop_event.set()
+        acquired = (
+            self.operations.acquire(timeout=26)
+            if stopping
+            else self.operations.acquire(blocking=False)
         )
-
-    def mutate(self, kind: str, payload: dict) -> str:
-        if not self.operations.acquire(blocking=False):
+        if not acquired:
             raise BusyError("另一项操作正在执行，请稍后重试。")
         try:
-            return (
-                self.update(payload)
-                if kind == "config"
-                else self.action(payload.get("action", ""))
-            )
+            if kind == "config":
+                return {"message": "配置已保存。", "data": self.store.save(payload)}
+            if kind == "detect":
+                return {"data": self.core.call("detect-portal")}
+            return self.action(payload.get("action", ""))
         finally:
             self.operations.release()

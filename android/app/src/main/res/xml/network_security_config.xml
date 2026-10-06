@@ -1,8 +1,0 @@
-<network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">10.101.2.194</domain>
-        <domain includeSubdomains="false">www.msftconnecttest.com</domain>
-        <domain includeSubdomains="false">connectivitycheck.gstatic.com</domain>
-    </domain-config>
-</network-security-config>

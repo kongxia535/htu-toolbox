@@ -6,26 +6,21 @@ let configured = false,
   dirty = false,
   initialized = false,
   loadingStatus = false;
-let logsController;
+let loadingLogs = false;
+let logLines = [];
 const dirtyFields = new Set();
 const defaults = {
   account: "",
   operator: "lt",
   portalUrl: "",
   intervalSeconds: 10,
-  watchdogIntervalMinutes: 5,
-  restartCount: 999,
-  restartIntervalMinutes: 1,
-  autoStart: true,
+  autoStart: false,
 };
 const fields = {
   account: "accountInput",
   operator: "operatorSelect",
   portalUrl: "portalInput",
   intervalSeconds: "intervalInput",
-  watchdogIntervalMinutes: "watchdogIntervalInput",
-  restartCount: "restartCountInput",
-  restartIntervalMinutes: "restartIntervalInput",
   autoStart: "autoStartInput",
 };
 function toast(message, error = false) {
@@ -63,9 +58,9 @@ async function api(path, { timeout = 20000, ...options } = {}) {
 }
 function date(value) {
   if (!value) return "—";
-  return new Date(
-    typeof value === "number" ? value * 1000 : value,
-  ).toLocaleTimeString("zh-CN", { hour12: false });
+  return new Date(Number(value) * 1000).toLocaleTimeString("zh-CN", {
+    hour12: false,
+  });
 }
 function setBusy(value) {
   busy = value;
@@ -75,7 +70,10 @@ function setBusy(value) {
     .forEach((el) => (el.disabled = value));
   document
     .querySelectorAll("[data-action]")
-    .forEach((el) => (el.disabled = value || !configured));
+    .forEach(
+      (el) =>
+        (el.disabled = value || (!configured && el.dataset.action !== "check")),
+    );
   $("saveButton").textContent = value ? "正在处理…" : "保存并连接";
 }
 function render(data) {
@@ -96,18 +94,12 @@ function render(data) {
     ? "在线"
     : network.state === "captive"
       ? "待认证"
-      : "未联网";
+      : network.state === "error"
+        ? "检测失败"
+        : "尚未检测";
   $("networkHint").textContent = network.online
     ? "已确认互联网连接"
-    : network.errors?.[0] || "请检查校园网络";
-  $("processState").textContent = task.stopping
-    ? "停止中"
-    : Number(task.watcherCount) > 0
-      ? "运行中"
-      : "未运行";
-  $("processHint").textContent = task.processIds?.length
-    ? `PID ${task.processIds.join(", ")}`
-    : "未检测到后台任务";
+    : network.message || "点击立即检测查看网络状态";
   $("nextRun").textContent = date(task.nextRunTime);
   $("lastRun").textContent = task.lastRunTime
     ? `上次 ${date(task.lastRunTime)}`
@@ -127,7 +119,6 @@ function render(data) {
   if (task.lastResult?.message)
     $("lastResult").textContent = task.lastResult.message;
   $("platformBadge").textContent = platform.name || "本地服务";
-  $("windowsOptions").hidden = platform.backend !== "scheduled-task";
   $("platformHint").textContent =
     platform.autostartHint || "服务仅在本机运行。";
   $("storageHint").textContent = "账号配置保存在本机，密码加密存储。";
@@ -161,15 +152,13 @@ async function loadStatus() {
   }
 }
 async function loadLogs() {
-  logsController?.abort();
-  logsController = new AbortController();
-  const current = logsController;
-  const timer = setTimeout(() => current.abort(), 12000);
+  if (loadingLogs) return;
+  loadingLogs = true;
   try {
     const { data } = await api(`/api/logs?tail=${$("logTail").value}`, {
-      signal: current.signal,
+      timeout: 12000,
     });
-    if (logsController !== current) return;
+    logLines = data.lines;
     const text = data.lines.length ? data.lines.join("\n") : "暂无记录";
     const bottom =
       $("logOutput").scrollHeight -
@@ -181,9 +170,9 @@ async function loadLogs() {
     $("logMeta").textContent =
       `${data.lines.length} 行${data.lastWriteTime ? ` · ${date(data.lastWriteTime)}` : ""}`;
   } catch (error) {
-    if (logsController === current) $("logMeta").textContent = error.message;
+    $("logMeta").textContent = error.message;
   } finally {
-    clearTimeout(timer);
+    loadingLogs = false;
   }
 }
 function markDirty(event) {
@@ -208,12 +197,17 @@ $("configForm").addEventListener("submit", async (event) => {
     const result = await api("/api/config", {
       method: "POST",
       body: JSON.stringify(payload),
-      timeout: 80000,
+      timeout: 20000,
     });
     $("passwordInput").value = "";
     dirty = false;
     dirtyFields.clear();
-    toast(result.message);
+    const started = await api("/api/action", {
+      method: "POST",
+      body: JSON.stringify({ action: "start" }),
+      timeout: 30000,
+    });
+    toast(`${result.message} ${started.message}`);
     await Promise.all([loadStatus(), loadLogs()]);
   } catch (error) {
     toast(error.message, true);
@@ -229,7 +223,7 @@ document.querySelectorAll("[data-action]").forEach((button) =>
       const result = await api("/api/action", {
         method: "POST",
         body: JSON.stringify({ action: button.dataset.action }),
-        timeout: 90000,
+        timeout: 30000,
       });
       $("lastResult").textContent = result.message;
       toast(result.message);
@@ -271,12 +265,9 @@ $("toggleLogButton").addEventListener("click", () => {
 $("downloadLogButton").addEventListener("click", async () => {
   $("downloadLogButton").disabled = true;
   try {
-    const response = await fetch("/api/download-log", {
-      headers: { "X-HTU-Token": token },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!response.ok) throw new Error("日志导出失败。");
-    const url = URL.createObjectURL(await response.blob()),
+    const url = URL.createObjectURL(
+        new Blob([logLines.join("\n")], { type: "text/plain;charset=utf-8" }),
+      ),
       link = document.createElement("a");
     link.href = url;
     link.download = "htu-connect.log";
@@ -287,29 +278,6 @@ $("downloadLogButton").addEventListener("click", async () => {
   } finally {
     $("downloadLogButton").disabled = false;
   }
-});
-function theme(value) {
-  document.documentElement.dataset.theme = value;
-  $("themeButton").setAttribute(
-    "aria-label",
-    value === "dark" ? "切换浅色主题" : "切换深色主题",
-  );
-}
-try {
-  theme(
-    localStorage.getItem("htu-theme") ||
-      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
-  );
-} catch {
-  theme("light");
-}
-$("themeButton").addEventListener("click", () => {
-  const value =
-    document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  theme(value);
-  try {
-    localStorage.setItem("htu-theme", value);
-  } catch {}
 });
 setBusy(false);
 async function poll() {
