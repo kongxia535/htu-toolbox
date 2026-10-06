@@ -148,6 +148,7 @@ class DesktopTests(unittest.TestCase):
             [str(binary), "--runtime-dir", str(self.directory), "net", *args],
             input=input,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=8,
         )

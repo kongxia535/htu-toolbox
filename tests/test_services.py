@@ -53,7 +53,11 @@ class ServiceTests(unittest.TestCase):
                         ).read_text()
                         self.assertIn("-m web.server --autostart", unit)
                         self.assertIn(
-                            "HTU_RUNTIME_DIR=" + str(directory / "private data"), unit
+                            "Environment="
+                            + installer.systemd_quote(
+                                "HTU_RUNTIME_DIR=" + str(directory / "private data")
+                            ),
+                            unit,
                         )
                     elif system == "Darwin":
                         data = plistlib.loads(

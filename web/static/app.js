@@ -77,19 +77,16 @@ function setBusy(value) {
   $("saveButton").textContent = value ? "正在处理…" : "保存并连接";
 }
 function render(data) {
-  const { task = {}, network = {}, config = {}, platform = {} } = data;
-  configured = !!config.passwordConfigured && task.ok !== false;
+  const { task, network, config, platform } = data;
+  configured = config.passwordConfigured;
   const running = task.state === "Running";
   const labels = {
     Running: "运行中",
     Ready: "已暂停",
-    Disabled: "已暂停",
     NotInstalled: "未配置",
-    Unknown: "读取失败",
   };
-  $("taskState").textContent = labels[task.state] || "等待启动";
-  $("taskHint").textContent =
-    task.error || (configured ? "账号已配置" : "请先保存账号");
+  $("taskState").textContent = labels[task.state];
+  $("taskHint").textContent = configured ? "账号已配置" : "请先保存账号";
   $("networkState").textContent = network.online
     ? "在线"
     : network.state === "captive"
@@ -101,26 +98,21 @@ function render(data) {
     ? "已确认互联网连接"
     : network.message || "点击立即检测查看网络状态";
   $("nextRun").textContent = date(task.nextRunTime);
-  $("lastRun").textContent = task.lastRunTime
-    ? `上次 ${date(task.lastRunTime)}`
+  $("lastRun").textContent = network.checkedAt
+    ? `上次 ${date(network.checkedAt)}`
     : "暂无检测记录";
-  $("connectionText").textContent =
-    task.ok === false
-      ? "后台状态读取失败"
-      : running
-        ? "自动登录已开启"
-        : configured
-          ? "自动登录已暂停"
-          : "等待账号配置";
+  $("connectionText").textContent = running
+    ? "自动登录已开启"
+    : configured
+      ? "自动登录已暂停"
+      : "等待账号配置";
   $("connectionPill").className =
-    `status-pill ${task.ok === false ? "danger" : running ? "success" : "neutral"}`;
+    `status-pill ${running ? "success" : "neutral"}`;
   $("lastUpdate").textContent =
     `更新于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`;
-  if (task.lastResult?.message)
-    $("lastResult").textContent = task.lastResult.message;
-  $("platformBadge").textContent = platform.name || "本地服务";
-  $("platformHint").textContent =
-    platform.autostartHint || "服务仅在本机运行。";
+  if (network.message) $("lastResult").textContent = network.message;
+  $("platformBadge").textContent = platform.name;
+  $("platformHint").textContent = platform.autostartHint;
   $("storageHint").textContent = "账号配置保存在本机，密码加密存储。";
   $("passwordConfigured").textContent = config.passwordConfigured
     ? "已保存 · 留空保留"

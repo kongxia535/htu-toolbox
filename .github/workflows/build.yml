@@ -34,9 +34,14 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          if [ -f "$RUNNER_TEMP/verify.log" ]; then
-            { printf '\n```text\n'; tail -n 100 "$RUNNER_TEMP/verify.log"; printf '\n```\n'; } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          log = Path(os.environ['RUNNER_TEMP']) / 'verify.log'
+          if log.exists():
+              text = '\n'.join(log.read_text(encoding='utf-8', errors='replace').splitlines()[-100:])
+              print('::error::' + text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'))
+          PY
       - run: python scripts/package-release.py
       - uses: actions/upload-artifact@v4
         with:

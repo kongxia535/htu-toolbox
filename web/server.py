@@ -147,18 +147,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             self.require_access()
             if parsed.path == "/api/status":
-                controller = self.server.controller
                 self.send_json(
                     200,
-                    {
-                        "ok": True,
-                        "data": {
-                            "task": controller.status(),
-                            "network": dict(controller.last_result),
-                            "config": controller.store.summary(),
-                            "platform": controller.platform_info(),
-                        },
-                    },
+                    {"ok": True, "data": self.server.controller.status()},
                 )
             elif parsed.path == "/api/detect-portal":
                 self.send_json(

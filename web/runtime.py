@@ -68,18 +68,20 @@ class Controller:
         config = self.store.summary()
         running = self.running()
         return {
-            "ok": True,
-            "state": (
-                "Running"
-                if running
-                else "Ready" if config["passwordConfigured"] else "NotInstalled"
-            ),
-            "nextRunTime": self.next_run,
-            "lastRunTime": self.last_result.get("checkedAt"),
-            "lastResult": dict(self.last_result),
-            "stopping": bool(
-                self.thread and self.thread.is_alive() and self.stop_event.is_set()
-            ),
+            "task": {
+                "state": (
+                    "Running"
+                    if running
+                    else "Ready" if config["passwordConfigured"] else "NotInstalled"
+                ),
+                "nextRunTime": self.next_run,
+                "stopping": bool(
+                    self.thread and self.thread.is_alive() and self.stop_event.is_set()
+                ),
+            },
+            "network": dict(self.last_result),
+            "config": config,
+            "platform": self.platform_info(),
         }
 
     def run(self, op: str) -> dict:
