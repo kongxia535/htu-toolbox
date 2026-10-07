@@ -1,6 +1,6 @@
 # HTU Connect
 
-Windows、Linux、macOS 校园网管理工具。Rust 实现唯一的校园网业务，Python 提供本机网页与后台运行，CLI 调用同一本机服务。当前版本 **2.0.0**，已移除 Android。
+Windows、Linux、macOS 校园网管理工具。Rust 实现唯一的校园网业务，Python 提供本机网页与后台运行，CLI 调用同一本机服务。当前版本 **2.0.0**
 
 完整的功能、接口与实现归属见 [功能接口与实现梳理](docs/功能接口与实现梳理.md)。
 
