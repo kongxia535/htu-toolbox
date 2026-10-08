@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from .config import atomic_write
 from .core import DashboardError
 from .runtime import BusyError, Controller
+from .session import open_running_service
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT_DIR / "web" / "static"
@@ -282,6 +283,9 @@ def main() -> int:
         os.environ["HTU_RUNTIME_DIR"] = str(args.runtime_dir)
     controller = Controller()
     directory = controller.store.directory
+    if args.open_browser and open_running_service(directory):
+        controller.close()
+        return 0
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     handler = RotatingFileHandler(
         directory / "campus-auto-login.log",
@@ -298,7 +302,15 @@ def main() -> int:
         server = DashboardServer(
             ServerConfig(args.host, args.port), secrets.token_urlsafe(32), controller
         )
+    except DashboardError as error:
+        controller.close()
+        # Another launcher may have finished starting after the initial check.
+        if args.open_browser and open_running_service(directory):
+            return 0
+        print(str(error), file=__import__("sys").stderr)
+        return 1
     except OSError:
+        controller.close()
         print("无法启动：端口已占用或不可用。", file=__import__("sys").stderr)
         return 1
 

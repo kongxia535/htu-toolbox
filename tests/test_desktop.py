@@ -13,6 +13,7 @@ from web.core import Core, DashboardError
 from web.config import ConfigStore
 from web.runtime import Controller
 from web.server import DashboardServer, ServerConfig
+from web.session import running_service_url
 
 CONFIG = {
     "account": "example",
@@ -175,6 +176,108 @@ class DesktopTests(unittest.TestCase):
             data["network"]["checkedAt"], self.controller.last_result["checkedAt"]
         )
 
+    def test_service_discovery_verifies_session_and_current_api(self):
+        expected = f"http://127.0.0.1:{self.server.server_port}/"
+        self.assertEqual(running_service_url(self.directory), expected)
+        with patch.object(self.controller, "status", return_value={"task": {}, "config": {}, "network": {}}):
+            self.assertIsNone(running_service_url(self.directory))
+        session = self.directory / "session.json"
+        for invalid in (
+            b"not json",
+            b"[]",
+            json.dumps({"port": True, "token": "test-token"}).encode(),
+            json.dumps({"port": "http://example.com", "token": "test-token"}).encode(),
+            json.dumps({"port": self.server.server_port, "token": "bad\r\nheader"}).encode(),
+            json.dumps({"port": self.server.server_port, "token": "stale-token"}).encode(),
+            b" " * 4097,
+        ):
+            with self.subTest(session=invalid[:80]):
+                session.write_bytes(invalid)
+                self.assertIsNone(running_service_url(self.directory))
+        session.unlink()
+        self.assertIsNone(running_service_url(self.directory))
+
+    def test_setup_reopens_live_service_without_install_or_second_process(self):
+        from scripts import setup
+
+        with patch("web.core.Core") as core, patch("web.session.webbrowser.open") as browser, patch(
+            "scripts.setup.subprocess.run"
+        ) as run, patch("sys.argv", ["setup.py", "--port", "8765"]), patch("builtins.print"):
+            core.return_value.call.return_value = {"path": str(self.directory)}
+            setup.main()
+        browser.assert_called_once_with(f"http://127.0.0.1:{self.server.server_port}/")
+        run.assert_not_called()
+
+    def test_manual_server_launch_reopens_live_service_without_resuming_worker(self):
+        from web import server
+
+        fresh = Controller(self.directory)
+        with patch("web.server.Controller", return_value=fresh), patch(
+            "web.server.DashboardServer"
+        ) as constructor, patch.object(fresh, "resume") as resume, patch(
+            "web.session.webbrowser.open"
+        ) as browser, patch("sys.argv", ["web.server", "--open-browser", "--port", "8765"]), patch("builtins.print"):
+            self.assertEqual(server.main(), 0)
+        constructor.assert_not_called()
+        resume.assert_not_called()
+        browser.assert_called_once_with(f"http://127.0.0.1:{self.server.server_port}/")
+
+    def test_setup_without_live_service_keeps_install_and_start_flow(self):
+        from scripts import setup
+
+        self.server.session_path.unlink()
+        root = self.directory / "setup-root"
+        python = root / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+        for installed in (False, True):
+            with self.subTest(installed=installed):
+                if installed:
+                    python.parent.mkdir(parents=True)
+                    python.touch()
+                with patch("scripts.setup.ROOT", root), patch("web.core.Core") as core, patch(
+                    "web.session.webbrowser.open"
+                ) as browser, patch("scripts.setup.subprocess.run") as run, patch(
+                    "sys.argv", ["setup.py", "--port", "18765"]
+                ):
+                    core.return_value.call.return_value = {"path": str(self.directory)}
+                    setup.main()
+                browser.assert_not_called()
+                self.assertEqual(run.call_count, 2 if installed else 3)
+                if not installed:
+                    self.assertIn("venv", run.call_args_list[0].args[0])
+                self.assertIn("pip", run.call_args_list[-2].args[0])
+                command = run.call_args_list[-1].args[0]
+                self.assertIn("web.server", command)
+                self.assertEqual(command[-1], "18765")
+
+    def test_install_only_does_not_reopen_or_launch_service(self):
+        from scripts import setup
+
+        with patch("scripts.setup.ROOT", self.directory / "install-only-root"), patch(
+            "web.core.Core"
+        ), patch("web.session.webbrowser.open") as browser, patch(
+            "scripts.setup.subprocess.run"
+        ) as run, patch("sys.argv", ["setup.py", "--install-only"]):
+            setup.main()
+        browser.assert_not_called()
+        self.assertEqual(run.call_count, 2)
+        self.assertIn("venv", run.call_args_list[0].args[0])
+        self.assertIn("pip", run.call_args.args[0])
+
+    def test_server_reuses_service_started_after_first_discovery(self):
+        from web import server
+
+        fresh = Controller(self.directory)
+        with patch("web.server.Controller", return_value=fresh), patch(
+            "web.server.open_running_service", side_effect=[False, True]
+        ) as reopen, patch("web.server.DashboardServer", side_effect=DashboardError("已有服务")), patch(
+            "web.server.logging.basicConfig"
+        ), patch("web.server.RotatingFileHandler"), patch.object(fresh, "resume") as resume, patch(
+            "sys.argv", ["web.server", "--open-browser"]
+        ):
+            self.assertEqual(server.main(), 0)
+        self.assertEqual(reopen.call_count, 2)
+        resume.assert_not_called()
+
     def test_save_only_does_not_start_worker(self):
         status, body = self.request("/api/config", "POST", CONFIG)
         self.assertEqual(status, 200)
@@ -309,14 +412,17 @@ class DesktopTests(unittest.TestCase):
             self.request("/api/config", "POST", {"password": "x" * (64 * 1024)})[0], 400
         )
 
-    def test_home_static_paths_and_single_theme(self):
+    def test_home_static_paths_and_workspace_settings(self):
         status, body = self.request("/")
         self.assertEqual(status, 200)
         self.assertIn(b"test-token", body)
-        self.assertNotIn(b"themeButton", body)
+        self.assertIn(b"themeButton", body)
+        self.assertIn(b"settingsDialog", body)
         self.assertNotIn(b"windowsOptions", body)
         self.assertEqual(self.request("/static/../../README.md")[0], 404)
         self.assertEqual(self.request("/static/app.js")[0], 200)
+        self.assertEqual(self.request("/static/theme-init.js")[0], 200)
+        self.assertEqual(self.request("/static/styles.css")[0], 200)
 
     def test_busy_operations_are_conflicts(self):
         self.controller.operations.acquire()

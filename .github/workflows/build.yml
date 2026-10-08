@@ -30,7 +30,9 @@ jobs:
             cargo clippy --workspace --all-targets --locked -- -D warnings
             cargo fmt --all --check
             python -m unittest discover -s tests -v
-            node --check web/static/app.js
+            for script in web/static/*.js web/static/vendor/morphicons/*.js; do
+              node --input-type=module --check < "$script"
+            done
           } 2>&1 | tee "$RUNNER_TEMP/verify.log"
       - name: Report failed verification
         if: failure()
